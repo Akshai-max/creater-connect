@@ -4,6 +4,7 @@
 //   npm run engine -- --provider candidates
 //   npm run engine -- --input tests/fixtures/leads-input.csv --dry-run
 //   npm run engine -- --purge-fixtures
+//   npm run engine -- --runs-json exports/runs.json   (run history for the workbook)
 // Exit code is non-zero when the run fails, so it can be scheduled safely.
 import { parseArgs } from "node:util"
 import { runEngine, type EngineOptions } from "../lib/leads/engine"
@@ -21,10 +22,21 @@ const { values } = parseArgs({
     out: { type: "string" },
     now: { type: "string" },
     "purge-fixtures": { type: "boolean", default: false },
+    "runs-json": { type: "string" },
   },
 })
 
 async function main() {
+  if (values["runs-json"]) {
+    const { listRuns } = await import("../lib/leads/repo")
+    const fs = await import("node:fs")
+    const path = await import("node:path")
+    const runs = await listRuns()
+    fs.mkdirSync(path.dirname(values["runs-json"]), { recursive: true })
+    fs.writeFileSync(values["runs-json"], JSON.stringify(runs, null, 2))
+    console.log(`wrote ${runs.length} runs to ${values["runs-json"]}`)
+    return
+  }
   if (values["purge-fixtures"]) {
     const { purgeFixtures } = await import("../lib/leads/repo")
     console.log(`purged ${await purgeFixtures()} fixture leads`)

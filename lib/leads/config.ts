@@ -9,7 +9,7 @@ export const RULES = {
   minLongform60d: 2,
   contactActiveDays: 60,
   personalizationMaxAgeDays: 60,
-  evidenceFreshnessDays: 14, // checked_date must be within this many days
+  evidenceFreshnessDays: 30, // checked_date must be within this many days (assessment brief §3)
   priorityACount: Number(process.env.PRIORITY_A_COUNT || 25),
   maxCountryShare: 0.6,
   minApprovedShare: 0.8,

@@ -138,6 +138,8 @@ These make the AI features actually about *your* brand:
 | `npm run discover` | Trigger a discovery run against the local dev server (needs `curl` + `jq`) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
+| `npm run bench -- --rows 5000` | Time a normal run and a refresh on synthetic rows (no database) |
+| `npm run workbook -- --template <xlsx> --leads <leads.csv> --out <xlsx>` | Fill the submission workbook from real engine output (needs Python 3 + `openpyxl`) |
 | `npm test` | Run the automated test suite (no database needed) |
 | `npm run typecheck` | TypeScript check |
 
@@ -257,7 +259,9 @@ npm run engine -- --input data/leads-input.csv         # the single command
 | `--now <iso>` | Evaluate time windows as of this instant (reproducible demos) |
 | `--purge-fixtures` | Delete fixture leads only |
 
-Each run writes `exports/leads.csv` (official, qualified only), `exports/leads-all.csv` (audit), `exports/validation-report.json`, and `exports/outreach/<lead_id>.md` (every Priority A sequence). It also records a row in `engine_runs`: start and finish time, duration, inserted, updated, unchanged, qualified, unverified, rejected, duplicate and failed counts, API units, cost, and redacted errors. You can see these on **/engine**. The process exits non-zero when a run fails.
+Each run writes `exports/leads.csv` (official, qualified only), `exports/leads-all.csv` (audit), `exports/validation-report.json`, `exports/outreach/<lead_id>.md` (every Priority A sequence) and `exports/outreach/_SEQUENCES_BY_SEGMENT.md` (templates for each segment on all 3 channels).
+
+`leads.csv` uses the submission workbook's vocabulary so the workbook's formulas recalculate the same result: rows sorted by `lead_id`; `creator_segment` is `Podcaster/Video Podcaster`, `YouTuber/Video-First Creator` or `Expert-Led Creator`; channels are `Email`/`LinkedIn`/`Instagram`; `candidate_status` is `Qualified` or `Rejected` (an internally *unverified* lead exports as `Rejected` with `UNVERIFIED (evidence missing): …`); `priority` is `A`/`B`/`C` for qualified rows only; `duplicate_check` is `UNIQUE`/`DUPLICATE`; and `completeness_check` mirrors the workbook formula (`COMPLETE`, `MISSING FIELDS` or `REJECTED`). It also records a row in `engine_runs`: start and finish time, duration, inserted, updated, unchanged, qualified, unverified, rejected, duplicate and failed counts, API units, cost, and redacted errors. You can see these on **/engine**. The process exits non-zero when a run fails.
 
 Reruns are idempotent. `lead_id` is a hash of `platform:stable_creator_id`, leads upsert on that identity, and the evidence for each lead is replaced inside a single transaction. Messages you've edited or approved are never overwritten.
 
@@ -285,7 +289,7 @@ Every check must pass for `qualified`. A failed **reject** check means the evide
 | contact | ≥1 published, business-use route with evidence, active within 60 days | unverified |
 | personalization | a titled content item from the last 60 days | unverified |
 | message | first message passes sender-ID, opt-out, content-reference and length checks | unverified |
-| complete / fresh | required fields present; `checked_date` within 14 days | unverified |
+| complete / fresh | required fields present; `checked_date` within 30 days | unverified |
 | unique | no other lead shares the identity, canonical profile URL or a published contact | reject |
 
 Dataset rules (shown on **/leads** and in `validation-report.json`): at least 80% of leads from approved countries, at least 3 approved countries, and no single country over 60%.
@@ -304,7 +308,7 @@ The score runs from 0 to 100, and every factor stores its points and the reason 
 | Reachability | 10 |
 | Personalization potential | 10 |
 
-Missing data earns 0 for its factor. Priority A is the top `PRIORITY_A_COUNT` (default 25) **qualified** leads, ranked across the whole dataset with ties broken by `lead_id`. Other qualified leads are B (score ≥ 60) or C. Leads that aren't qualified get N/A.
+Missing data earns 0 for its factor. Priority A is the top `PRIORITY_A_COUNT` (default 25) **qualified** leads, ranked across the whole dataset with ties broken by `lead_id`. Other qualified leads are B (score ≥ 60) or C. Leads that aren't qualified get N/A in the database and an empty `priority` in the export.
 
 ### Channels and messages
 
@@ -355,7 +359,7 @@ npm run seed-test -- start                                   # schedules + sends
 npm run seed-test -- mark-sent --test <id> --channel linkedin
 # click the tracking link in each message (logs a click), reply from the test account, then:
 npm run seed-test -- reply --test <id> --channel email
-npm run seed-test -- report --test <id>                      # expected vs observed; exits 2 until all pass
+npm run seed-test -- report --test <id> --json exports/seed-report.json   # expected vs observed; exits 2 until all pass
 ```
 
 LinkedIn and Instagram have no permitted API for sending these messages, so those channels use a manual adapter: you send from your own account, then log the send and the reply on **/engine** or from the CLI. Tracking links (`/api/t/<token>`) record each click with a timestamp. A seed test reports **passed** only when every expected event (scheduled, sent, click, reply) has been observed on every allowlisted channel.
@@ -366,12 +370,40 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 32 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
+There are 33 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
+
+### Scale benchmark
+
+```bash
+npm run bench -- --rows 5000
+```
+
+This generates **synthetic** rows (every name says "Fixture", and all evidence is on example.com), then times a normal run and a refresh with 5% of rows edited and 5% new. It checks that the export has 0 duplicates and writes `exports/bench/bench-results.json`. It runs as a dry run, so it measures the qualify → score → channel → draft → export pipeline but not database writes. On the author's machine, 5,050 rows took 3.9 s and the 5,250-row refresh took 6.1 s, with 0 export duplicates and $0 cost.
+
+### Submission workbook
+
+```bash
+npm run engine -- --runs-json exports/runs.json
+npm run workbook -- --template <IncuBrix workbook.xlsx> --leads exports/leads.csv --runs exports/runs.json \
+  --runs-map normal=<run_id>,repeat=<run_id>,refresh=<run_id>,failure=<run_id>,recovery=<run_id> \
+  --bench exports/bench/bench-results.json --seed-report exports/seed-report.json \
+  --repo-url <your repo URL> --out submission/IncuBrix_Submission_Workbook.xlsx
+```
+
+`scripts/fill_workbook.py` writes only the yellow input cells and leaves the green formula cells for IncuBrix to recalculate. Here's what it fills:
+
+- **02_LEADS:** the first 1,000 rows of `leads.csv`, sorted by `lead_id`.
+- **03_ENGINE_LAUNCH:** the engine-proof cells, the run summary from recorded `engine_runs`, and the launch-kit summary.
+- **04_SELF_CHECK:** the minimums, with evidence paths.
+- **00_START:** the repository URL and the tools used.
+
+It refuses fixture rows unless you pass `--allow-fixtures` (for demos only). It marks the seed test as passed only when the seed report passes on at least 3 channels.
+
+You must fill the rest yourself: your personal details, the 01_INSIGHT tab (it needs your own use of the product), video links, manual-work disclosure, the declaration and the self-score.
 
 ### Known limitations
 
 - **No real lead data is included.** The engine qualifies only what the evidence supports. Monetization, need and contact evidence must come from permitted research or licensed data. Nothing in this repo produces them, and no scraping is done.
-- The submission workbook isn't in the repo, so it hasn't been filled in. `validation-report.json` holds the numbers you need to reconcile against it.
 - Evidence URLs are checked for format and recency, not fetched. Use the 20-lead audit to spot-check them.
 - Run counts for qualified, unverified and rejected describe the batch. Inserted, updated and unchanged describe what was actually persisted. A failed run records partial persistence.
 - Message templates are in English and deterministic. Optional AI rewriting is intentionally not implemented so that drafts can't contain unsupported claims.

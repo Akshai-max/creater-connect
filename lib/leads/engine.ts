@@ -8,7 +8,7 @@ import { buildExport, type ExportableLead, type ExportReport } from "./export"
 import { emptyIndex, processBatch, type BatchResult, type ProcessedLead } from "./process"
 import { fetchYouTubeActivity, mergeYouTube, readInputFile, type ProviderRow } from "./providers"
 import { assignPriorities } from "./scoring"
-import { generateSequences } from "./messages"
+import { generateSequences, segmentTemplatesMarkdown } from "./messages"
 import { senderFromEnv } from "./config"
 import type { GeneratedMessage } from "./types"
 
@@ -210,5 +210,6 @@ export function writeExports(allLeads: ExportableLead[], messages: MessageRow[],
     }
     fs.writeFileSync(path.join(odir, `${leadId}.md`), parts.join("\n"), "utf8")
   }
+  fs.writeFileSync(path.join(odir, "_SEQUENCES_BY_SEGMENT.md"), segmentTemplatesMarkdown(senderFromEnv()), "utf8")
   return official.report
 }

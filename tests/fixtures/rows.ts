@@ -19,7 +19,7 @@ function items(count: number, opts: { longform?: number; startDay?: number; step
   return JSON.stringify(out)
 }
 
-const base = (n: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+export const base = (n: number, over: Record<string, unknown> = {}): Record<string, unknown> => ({
   creator_name: `Fixture Creator ${n}`,
   creator_segment: "video_podcaster",
   entity_type: "individual",

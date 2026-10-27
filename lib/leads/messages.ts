@@ -129,6 +129,38 @@ export function generateSequences(
   return out
 }
 
+// Segment-level sequence templates (the brief's "sequences for each segment on at
+// least 3 channels"). Rendered from the same builder as per-lead drafts, with
+// {{placeholders}} where lead evidence goes, so the two can never drift apart.
+const SEGMENT_TEMPLATE_INPUTS: { label: string; segment: string; need: NeedSignal; longform: boolean }[] = [
+  { label: "Podcaster/Video Podcaster", segment: "video_podcaster", need: "repurposing", longform: true },
+  { label: "YouTuber/Video-First Creator", segment: "youtuber", need: "publishing_consistency", longform: false },
+  { label: "Expert-Led Creator", segment: "expert_creator", need: "content_creation", longform: true },
+]
+
+export function segmentTemplatesMarkdown(sender: Sender | null): string {
+  const s = sender ?? { name: "{{sender_name}}", role: "{{sender_role}}", company: "{{sender_company}}", website: "{{sender_website}}", postalAddress: "{{sender_postal_address}}" }
+  const parts = [
+    "# Outreach sequences by segment\n",
+    "Templates for each segment on 3 channels (email, LinkedIn, Instagram): 1 initial message + 2 follow-ups.",
+    "Per-lead drafts in this folder fill the {{placeholders}} from that lead's stored evidence only.",
+    "Cadence: initial on day 0, follow-up 1 on day 3, follow-up 2 on day 7. LinkedIn and Instagram are sent by hand.\n",
+  ]
+  for (const t of SEGMENT_TEMPLATE_INPUTS) {
+    const item = (n: 1 | 2): ContentItem => ({ url: `{{recent_content_url_${n}}}`, title: `{{recent_content_title_${n}}}`, publishedAt: "2000-01-0" + n, isLongform: t.longform })
+    const input = { creatorName: "{{first_name}}", need: t.need, needSignalText: "{{need_evidence_paraphrase}}", needEvidenceUrl: "{{need_evidence_url}}" } as LeadInput
+    parts.push(`## ${t.label}\n\n_Example need: ${t.need} → "${VALUE_PROPS[t.need]}". The value line follows each lead's evidenced need._\n`)
+    for (const ch of OUTREACH_CHANNELS) {
+      parts.push(`### ${ch}\n`)
+      for (const seq of [1, 2, 3] as const) {
+        const m = build(ch, seq, input, s, [item(1), item(2)])
+        parts.push(`#### ${seq === 1 ? "Initial" : `Follow-up ${seq - 1}`}\n${m.subject ? `**Subject:** ${m.subject}\n\n` : ""}${m.body}\n`)
+      }
+    }
+  }
+  return parts.join("\n")
+}
+
 export type MessageValidation = { ok: boolean; problems: string[] }
 
 export function validateMessage(m: Pick<GeneratedMessage, "channel" | "sequence" | "body" | "subject">, sender: Sender, contentRef: { title: string; url: string } | null): MessageValidation {

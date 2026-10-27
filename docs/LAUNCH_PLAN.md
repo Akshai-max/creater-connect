@@ -55,7 +55,7 @@
 
 | Risk | Mitigation |
 |---|---|
-| Stale evidence (a creator goes quiet) | The 14-day `checked_date` freshness rule plus daily reruns. Leads that go stale drop to `unverified` automatically. |
+| Stale evidence (a creator goes quiet) | The 30-day `checked_date` freshness rule plus daily reruns. Leads that go stale drop to `unverified` automatically. |
 | Deliverability damage | Warm-up, low volume, opt-out in every email, and a stop if bounces exceed 2% |
 | Platform restrictions (LinkedIn, Instagram) | Manual sending only, no automation tools, conservative volumes |
 | Wrong contact route | Only published routes with evidence. Spot-check contact details in the weekly 20-lead audit (target ≥90% accurate). |

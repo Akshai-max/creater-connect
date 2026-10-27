@@ -75,17 +75,42 @@ test("export is deterministic and the report reconciles with the CSV", () => {
   assert.equal(a.csv, b.csv)
   const rows = parse(a.csv, { columns: true }) as Record<string, string>[]
   assert.equal(a.report.rows, rows.length)
-  assert.equal(a.report.byStatus.qualified, rows.filter((x) => x.candidate_status === "qualified").length)
+  assert.equal(a.report.byStatus.Qualified, rows.filter((x) => x.candidate_status === "Qualified").length)
   assert.equal(a.report.qualifiedComplete, rows.filter((x) => x.completeness_check === "COMPLETE" && x.duplicate_check === "UNIQUE").length)
-  assert.ok(rows.every((x) => x.candidate_status === "qualified"), "official export holds only qualified rows")
+  assert.ok(rows.every((x) => x.candidate_status === "Qualified"), "official export holds only qualified rows")
   assert.ok(rows.every((x) => x.completeness_check === "COMPLETE"), JSON.stringify(rows.map((x) => x.completeness_check)))
+  const ids = rows.map((x) => x.lead_id)
+  assert.deepEqual(ids, [...ids].sort(), "rows sorted by lead_id, as the workbook asks")
+})
+
+test("export values match the workbook's dropdowns and formulas", () => {
+  const leads = run(FIXTURE_ROWS).processed.map(toExportable)
+  const { records } = buildExport(leads, { includeNonQualified: true })
+  const segments = ["Podcaster/Video Podcaster", "YouTuber/Video-First Creator", "Expert-Led Creator"]
+  const channels = ["Email", "LinkedIn", "Instagram", ""]
+  for (const r of records) {
+    assert.ok(["Qualified", "Rejected"].includes(r.candidate_status), r.candidate_status)
+    assert.ok(["A", "B", "C", ""].includes(r.priority), r.priority)
+    assert.ok(["UNIQUE", "DUPLICATE"].includes(r.duplicate_check), r.duplicate_check)
+    assert.ok(["COMPLETE", "MISSING FIELDS", "REJECTED", "ADD REASON"].includes(r.completeness_check), r.completeness_check)
+    if (r.candidate_status === "Qualified") {
+      assert.ok(segments.includes(r.creator_segment), r.creator_segment)
+      assert.ok(channels.includes(r.best_channel) && channels.includes(r.backup_channel), `${r.best_channel}/${r.backup_channel}`)
+      assert.notEqual(r.priority, "")
+    } else {
+      assert.equal(r.priority, "")
+      assert.equal(r.completeness_check, "REJECTED")
+    }
+  }
+  // An unverified lead (missing evidence) is not qualified: exported as Rejected with the reason.
+  assert.ok(records.some((r) => r.rejection_reason.startsWith("UNVERIFIED")))
 })
 
 test("duplicate_check is computed from the exported rows", () => {
   const leads = run(FIXTURE_ROWS).processed.map(toExportable)
   const clone = { ...leads[0], id: "L-ZZZZZZZZZZ" }
   const { records } = buildExport([...leads, clone], { includeNonQualified: true })
-  assert.equal(records.find((x) => x.lead_id === "L-ZZZZZZZZZZ")!.duplicate_check, `DUPLICATE:${leads[0].id}`)
+  assert.equal(records.find((x) => x.lead_id === "L-ZZZZZZZZZZ")!.duplicate_check, "DUPLICATE")
   assert.equal(records.find((x) => x.lead_id === leads[0].id)!.duplicate_check, "UNIQUE")
 })
 

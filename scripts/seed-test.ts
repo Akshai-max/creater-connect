@@ -2,13 +2,13 @@
 //   npm run seed-test -- start [--no-send]
 //   npm run seed-test -- mark-sent --test <id> --channel linkedin
 //   npm run seed-test -- reply --test <id> --channel email
-//   npm run seed-test -- report --test <id>
+//   npm run seed-test -- report --test <id> [--json exports/seed-report.json]
 import { parseArgs } from "node:util"
 import { logManualEvent, refreshSeedStatus, startSeedTest } from "../lib/leads/seed-repo"
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
-  options: { test: { type: "string" }, channel: { type: "string" }, note: { type: "string" }, "no-send": { type: "boolean", default: false } },
+  options: { test: { type: "string" }, channel: { type: "string" }, note: { type: "string" }, "no-send": { type: "boolean", default: false }, json: { type: "string" } },
 })
 
 async function main() {
@@ -31,6 +31,10 @@ async function main() {
   }
   const report = await refreshSeedStatus(values.test)
   console.log(JSON.stringify(report, null, 2))
+  if (values.json) {
+    const fs = await import("node:fs")
+    fs.writeFileSync(values.json, JSON.stringify({ testId: values.test, generatedAt: new Date().toISOString(), ...report }, null, 2))
+  }
   if (cmd === "report" && !report.pass) process.exitCode = 2
 }
 

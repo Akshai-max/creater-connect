@@ -202,6 +202,10 @@ export async function finishRun(id: string, patch: Partial<typeof engineRuns.$in
   await db.update(engineRuns).set(patch).where(eq(engineRuns.id, id))
 }
 
+export async function listRuns(limit = 100) {
+  return db.select().from(engineRuns).orderBy(sql`${engineRuns.startedAt} desc`).limit(limit)
+}
+
 export async function purgeFixtures(): Promise<number> {
   const rows = await db.delete(leads).where(eq(leads.isFixture, true)).returning({ id: leads.id })
   return rows.length

@@ -54,3 +54,6 @@ seed-creators.csv
 /exports/
 # fictional test fixtures are safe to commit
 !tests/fixtures/*.csv
+
+# filled submission workbook (contains lead data)
+/submission/

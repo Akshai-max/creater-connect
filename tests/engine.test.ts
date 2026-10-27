@@ -35,16 +35,22 @@ test("dry run: CSV in → leads.csv, audit CSV, report and outreach folder out",
   assert.ok(official.every((r) => r.priority === "A"))
   const all = parse(fs.readFileSync(path.join(out, "leads-all.csv"), "utf8"), { columns: true }) as Record<string, string>[]
   assert.equal(all.length, 10)
-  assert.ok(all.filter((r) => r.candidate_status !== "qualified").every((r) => r.rejection_reason && r.priority === "N/A"))
+  assert.ok(all.filter((r) => r.candidate_status !== "Qualified").every((r) => r.rejection_reason && r.priority === ""))
 
   const report = JSON.parse(fs.readFileSync(path.join(out, "validation-report.json"), "utf8"))
   assert.equal(report.official.rows, 4)
   assert.equal(report.official.duplicates, 0)
 
-  const md = fs.readdirSync(path.join(out, "outreach"))
+  const md = fs.readdirSync(path.join(out, "outreach")).filter((f) => f.startsWith("L-"))
   assert.equal(md.length, 4)
   const sample = fs.readFileSync(path.join(out, "outreach", md[0]), "utf8")
   for (const h of ["## email", "## linkedin", "## instagram", "### Initial", "### Follow-up 1", "### Follow-up 2"]) assert.ok(sample.includes(h), h)
+
+  // Segment templates: 3 segments × 3 channels × (initial + 2 follow-ups).
+  const seg = fs.readFileSync(path.join(out, "outreach", "_SEQUENCES_BY_SEGMENT.md"), "utf8")
+  for (const label of ["Podcaster/Video Podcaster", "YouTuber/Video-First Creator", "Expert-Led Creator"]) assert.ok(seg.includes(`## ${label}`), label)
+  assert.equal(seg.match(/^#### /gm)!.length, 27)
+  assert.equal(seg.match(/unsubscribe|no thanks/g)!.length >= 27, true)
 })
 
 test("dry run with a broken input file fails the run and reports why", async () => {
