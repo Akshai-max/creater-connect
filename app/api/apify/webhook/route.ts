@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { candidates, creators } from "@/lib/db/schema"
 import { sql } from "drizzle-orm"
+import { checkBearer } from "@/lib/auth"
 
 // Receives Apify webhook with newly-scraped candidates.
 // Expected payload shape:
@@ -10,13 +11,9 @@ import { sql } from "drizzle-orm"
 // Auth: simple shared-secret in `Authorization: Bearer ${APIFY_WEBHOOK_SECRET}`
 
 export async function POST(req: NextRequest) {
-  const expected = process.env.APIFY_WEBHOOK_SECRET
-  if (expected) {
-    const authHeader = req.headers.get("authorization") || ""
-    const token = authHeader.replace(/^Bearer\s+/i, "")
-    if (token !== expected) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    }
+  // Constant-time compare; in production a missing secret rejects everything.
+  if (!checkBearer(req.headers.get("authorization"), process.env.APIFY_WEBHOOK_SECRET).ok) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
   let payload: any
@@ -28,6 +25,13 @@ export async function POST(req: NextRequest) {
 
   if (!Array.isArray(payload?.candidates)) {
     return NextResponse.json({ error: "Missing candidates array" }, { status: 400 })
+  }
+  if (payload.candidates.length > 5000) {
+    return NextResponse.json({ error: "Too many candidates (max 5000)" }, { status: 413 })
+  }
+  const bad = payload.candidates.findIndex((c: any) => !c || typeof c !== "object" || (c.followers != null && typeof c.followers !== "number"))
+  if (bad !== -1) {
+    return NextResponse.json({ error: `candidates[${bad}] is not a valid object (followers must be a number)` }, { status: 400 })
   }
 
   // Build a lowercase-handle dedup set against existing creators + candidates

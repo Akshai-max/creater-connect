@@ -23,10 +23,9 @@ function isAuthorized(req: NextRequest): boolean {
   const expected = process.env.CRON_SECRET
   if (!expected) return true // No secret set → allow (dev mode)
   const auth = req.headers.get("authorization") || ""
-  if (auth === `Bearer ${expected}`) return true
-  // Vercel cron sends with x-vercel-cron header — also allow if from cron context
-  if (req.headers.get("x-vercel-cron")) return true
-  return false
+  // Vercel Cron sends this header automatically when CRON_SECRET is set. The old
+  // x-vercel-cron bypass was removed: any client can set that header.
+  return auth === `Bearer ${expected}`
 }
 
 export async function GET(req: NextRequest) {

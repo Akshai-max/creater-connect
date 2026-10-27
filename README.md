@@ -1,35 +1,77 @@
 # Creator CRM
 
-An open, self-hostable **creator / influencer CRM** for running an outreach program end to end — discover creators, score them for fit, manage a pipeline, draft and send outreach, and track every interaction. Built on **Next.js 16 + Postgres + Drizzle ORM** and deploys to Vercel in a few minutes.
+An open, self-hostable **creator / influencer CRM** for running an outreach program end to end: discover creators, score them for fit, manage a pipeline, draft and send outreach, and track every interaction. Built on **Next.js 16 + Postgres (Neon) + Drizzle ORM**, and deploys to Vercel in a few minutes.
 
 It works out of the box with zero API keys (heuristic scoring + template emails) and gets smarter as you add optional integrations (Claude for AI scoring/drafting, Resend for email, Apify for auto-discovery).
 
 > **This is a template.** All sample data is fictional. Point it at your own brand via a few environment variables (see [Configuration](#configuration)).
 
+## Contents
+
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Quick start (local)](#quick-start-local)
+- [Configuration](#configuration)
+- [npm scripts](#npm-scripts)
+- [Project structure](#project-structure)
+- [Deploy to Vercel](#deploy-to-vercel)
+- [Importing your own creators](#importing-your-own-creators)
+- [Automated discovery (optional)](#automated-discovery-optional)
+- [Lead engine](#lead-engine)
+- [Database schema](#database-schema)
+- [Troubleshooting](#troubleshooting)
+- [Security notes](#security-notes)
+- [License](#license)
+
+---
+
+## How it works
+
+```
+ Discover            Review              Manage                     Close
+┌──────────┐      ┌────────────┐      ┌──────────────────┐      ┌──────────┐
+│ Apify    │      │ Candidate  │  ✅  │ Roster + Pipeline│      │ Live →   │
+│ scrape / │ ───► │ queue      │ ───► │ (10 stages)      │ ───► │ Paid →   │
+│ webhook /│      │ fit score  │      │ outreach, notes, │      │ Past Hire│
+│ CSV seed │      │ 0–10       │  ❌  │ tasks, tags      │      │          │
+└──────────┘      └────────────┘      └──────────────────┘      └──────────┘
+```
+
+1. **Discover**: creators come in from the daily Apify scrape (`/api/discover`), the webhook (`/api/apify/webhook`), or a CSV import.
+2. **Score & filter**: each candidate gets a 0–10 fit score against your `BRAND_CONTEXT` (Claude, or a heuristic without an API key), and obvious junk (brand accounts, off-niche, etc.) is filtered out.
+3. **Review**: you approve ✅ or reject ❌ candidates in the queue. Approved ones become **creators** in the roster at the `Lead` stage.
+4. **Work the pipeline**: draft personalized outreach, move creators through stages, log notes and tags. Stage changes auto-create follow-up tasks and log to the activity timeline.
+5. **Today view**: the dashboard (`/`) shows tasks due today and recent activity.
+
 ## Features
 
-- **Pipeline Kanban** — a 10-stage flow (Lead → Outreached → Replied → Negotiating → Briefed → Content In → Live → Paid → Past Hire → Cold)
-- **Roster** — searchable, filterable creator database
-- **Candidate queue** — auto-discovered creators land here for one-click ✅/❌ review
-- **AI fit scoring** — each candidate scored 0–10 against *your* brand context (Claude Haiku 4.5), with a heuristic fallback when no API key is set
-- **AI outreach drafts** — personalized pitches grounded in the creator's own content, sent via Resend (or saved as drafts)
-- **Activity timeline** — every stage change, note, tag, and task auto-logs per creator
-- **Tasks & auto-tasks** — stage transitions create follow-up tasks with due dates
-- **Tags** — free-form labels with roster filtering
+- **Pipeline Kanban**: a 10-stage flow (Lead → Outreached → Replied → Negotiating → Briefed → Content In → Live → Paid → Past Hire → Cold)
+- **Roster**: searchable, filterable creator database
+- **Candidate queue**: auto-discovered creators land here for one-click ✅/❌ review
+- **AI fit scoring**: each candidate scored 0–10 against *your* brand context (Claude Haiku 4.5), with a heuristic fallback when no API key is set
+- **AI outreach drafts**: personalized pitches grounded in the creator's own content, sent via Resend (or saved as drafts)
+- **Activity timeline**: every stage change, note, tag, and task auto-logs per creator
+- **Tasks & auto-tasks**: stage transitions create follow-up tasks with due dates
+- **Tags**: free-form labels with roster filtering
+- **Campaigns**: group creators under a campaign
 
 ## Tech stack
 
-- **Next.js 16** (App Router, Server Components, Server Actions)
-- **Postgres** (any provider; [Neon](https://neon.tech) free tier recommended)
-- **Drizzle ORM** (`drizzle-orm/neon-http`)
-- **Tailwind CSS 4** + shadcn-style primitives
-- **Anthropic SDK** (optional) — Claude Haiku 4.5
-- **Resend** (optional) — email delivery
-- **Apify** (optional) — creator discovery
+- **Next.js 16** (App Router, Server Components, Server Actions, Turbopack)
+- **React 19**
+- **Postgres on [Neon](https://neon.tech)** (free tier is plenty)
+- **Drizzle ORM** (`drizzle-orm/neon-http`) + `drizzle-kit` for schema push
+- **Tailwind CSS 4** + shadcn-style primitives (Radix UI, lucide icons)
+- **Anthropic SDK** (optional): Claude Haiku 4.5
+- **Resend** (optional): email delivery
+- **Apify** (optional): creator discovery
 
 ---
 
 ## Quick start (local)
+
+**Prerequisites:** Node.js 20+ and a free [Neon](https://neon.tech) Postgres database.
 
 ```bash
 git clone https://github.com/<your-username>/creator-crm.git
@@ -41,7 +83,9 @@ npm run db:seed                 # load a few fictional sample candidates
 npm run dev                     # http://localhost:3000
 ```
 
-Sign in with the `APP_PASSWORD` you set.
+Open http://localhost:3000 and sign in with the `APP_PASSWORD` you set.
+
+> **Windows:** these commands work in PowerShell and Git Bash. In `cmd.exe`, use `copy .env.example .env.local` instead of `cp`.
 
 ---
 
@@ -53,8 +97,10 @@ All configuration is via environment variables. Copy `.env.example` → `.env.lo
 
 | Variable | What it's for | Where to get it |
 |---|---|---|
-| `APP_PASSWORD` | Shared password to sign in. Anyone with it gets in — use a long random string. | You choose it |
-| `DATABASE_URL` | Postgres connection string. | [Neon](https://neon.tech) (free) or any Postgres. On Vercel, provision Neon from the **Storage** tab and it's injected automatically. |
+| `APP_PASSWORD` | Shared password to sign in. Anyone with it gets in, so use a long random string. If unset, the app is **open to anyone**. | You choose it |
+| `DATABASE_URL` | Neon Postgres connection string (`postgres://…?sslmode=require`). | [Neon](https://neon.tech) → project → **Connection string**. On Vercel, provision Neon from the **Storage** tab and it's injected automatically. |
+
+> The app uses Neon's serverless HTTP driver, so `DATABASE_URL` must point at a **Neon** database. A plain local Postgres won't work without a Neon HTTP proxy. See [Troubleshooting](#troubleshooting).
 
 ### Brand config (recommended)
 
@@ -63,8 +109,8 @@ These make the AI features actually about *your* brand:
 | Variable | What it's for |
 |---|---|
 | `BRAND_NAME` | Display name shown in the UI and used in outreach (default: `Acme`). |
-| `TARGET_NICHE` | The kind of creators you want — drives the fit scorer (e.g. `home fitness`, `skincare`). |
-| `BRAND_CONTEXT` | A short paragraph about your brand, products, positioning, and what makes a creator a good fit. Injected verbatim into the AI prompts — be specific. |
+| `TARGET_NICHE` | The kind of creators you want. Drives the fit scorer (e.g. `home fitness`, `skincare`). |
+| `BRAND_CONTEXT` | A short paragraph about your brand, products, positioning, and what makes a creator a good fit. Injected verbatim into the AI prompts, so be specific. |
 
 ### Optional integrations (degrade gracefully)
 
@@ -73,9 +119,71 @@ These make the AI features actually about *your* brand:
 | `ANTHROPIC_API_KEY` | AI candidate scoring + outreach drafting ([console.anthropic.com](https://console.anthropic.com), ~$0.001/call) | Falls back to heuristic scoring + template emails |
 | `RESEND_API_KEY` + `OUTREACH_FROM_EMAIL` | Sending real emails ([resend.com](https://resend.com)) | Pitches save as drafts |
 | `APIFY_TOKEN` + `APIFY_WEBHOOK_SECRET` | Automated daily creator discovery ([console.apify.com](https://console.apify.com)) | Skip auto-discovery; add candidates manually or via the API |
-| `CRON_SECRET` | Protects `/api/discover` in production (Vercel Cron bypasses it) | Endpoint is unprotected — set this in production |
+| `CRON_SECRET` | Protects `/api/discover` in production (Vercel Cron bypasses it) | Endpoint is unprotected, so set this in production |
 
 > **Security:** `.env.local` is git-ignored. **Never commit real keys, connection strings, or creator PII.** See [Security notes](#security-notes).
+
+---
+
+## npm scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the dev server at http://localhost:3000 |
+| `npm run build` | Production build |
+| `npm start` | Run the production build |
+| `npm run db:push` | Create/update tables in your database from `lib/db/schema.ts` |
+| `npm run db:studio` | Open Drizzle Studio to browse and edit data |
+| `npm run db:seed` | Load sample candidates (and `seed-creators.csv` if present). Safe to re-run. |
+| `npm run discover` | Trigger a discovery run against the local dev server (needs `curl` + `jq`) |
+| `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
+| `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
+| `npm test` | Run the automated test suite (no database needed) |
+| `npm run typecheck` | TypeScript check |
+
+`scripts/` also contains one-off maintenance scripts (rescoring, enrichment, stats, cleanup). Run any of them with:
+
+```bash
+node --env-file=.env.local --import tsx scripts/<name>.ts
+```
+
+---
+
+## Project structure
+
+```
+app/
+  page.tsx                 Dashboard: today's tasks + recent activity
+  login/                   Password sign-in
+  candidates/              Discovery review queue (approve / reject / cleanup)
+  creators/                Roster, creator detail (notes, tags, tasks, timeline)
+  pipeline/                10-stage Kanban + stage mover
+  outreach/                Outreach list + AI composer
+  campaigns/               Campaigns
+  api/
+    discover/              Daily discovery job (Vercel Cron)
+    apify/webhook/         Inbound candidates from Apify / any scraper
+    avatar/[kind]/[id]/    Avatar image proxy
+components/                Sidebar, avatar, shadcn-style UI primitives
+lib/
+  db/                      Drizzle client + schema
+  ai-scoring.ts            Claude / heuristic fit scoring
+  outreach-prompt.ts       Outreach drafting prompt
+  candidate-quality.ts     Junk-filter signals
+  apify-client.ts          Apify scrapers + hashtag rotation
+  stages.ts                Pipeline stage definitions
+  stage-automations.ts     Auto-tasks on stage change
+  activity.ts              Activity timeline logging
+  brand.ts                 Brand config from env vars
+app/leads/                 Lead list, validation, evidence, 3-channel sequence editor
+app/engine/                Run history + seed-test results
+lib/leads/                 Lead engine: qualify, score, channels, messages, export, providers, repo, engine
+lib/auth.ts                Constant-time bearer check for webhooks
+tests/                     node:test suite + fictional fixtures
+proxy.ts                   Password gate (Next.js 16 "proxy", formerly middleware)
+scripts/                   Seed + maintenance scripts
+vercel.json                Daily cron for /api/discover (13:00 UTC)
+```
 
 ---
 
@@ -84,9 +192,11 @@ These make the AI features actually about *your* brand:
 1. **Push your fork/clone to GitHub.**
 2. **Import the repo** at [vercel.com/new](https://vercel.com/new). Framework (Next.js) is auto-detected.
 3. **Provision a database**: project → **Storage** → **Create Database** → **Neon** (free). This injects `DATABASE_URL` automatically.
-4. **Add env vars**: project → **Settings → Environment Variables**. Set `APP_PASSWORD` and the brand config; add optional keys as needed.
+4. **Add env vars**: project → **Settings → Environment Variables**. Set `APP_PASSWORD`, `CRON_SECRET`, and the brand config; add optional keys as needed.
 5. **Create the schema**: locally, with `.env.local` pointing at the same database, run `npm run db:push` (and `npm run db:seed` if you want sample data). Or use the Neon SQL editor.
 6. **Redeploy** so the new env vars take effect.
+
+`vercel.json` schedules `/api/discover` daily at 13:00 UTC with a 300s function timeout.
 
 ---
 
@@ -94,7 +204,7 @@ These make the AI features actually about *your* brand:
 
 `npm run db:seed` loads a few fictional sample candidates. To bulk-import a real roster, drop a CSV at the project root named `seed-creators.csv` (or set `CSV_PATH`) and re-run the seed. Expected columns include `creator_id` (e.g. `CR001`), `Name`, `Handle`, `Platform`, `Follower count`, `Email`, `Location`, `Niche`, `Audience`, `Rate ceiling ($)`, `Lifecycle status`, `Flag notes`, etc. See `scripts/seed-from-csv.ts` for the full mapping.
 
-> Keep `seed-creators.csv` out of git — it's covered by `*.csv` in `.gitignore`. Real contact data should never be committed.
+> Keep `seed-creators.csv` out of git. It's covered by `*.csv` in `.gitignore`. Real contact data should never be committed.
 
 ## Automated discovery (optional)
 
@@ -118,9 +228,190 @@ Content-Type: application/json
 
 Edit the example hashtag rotation in `lib/apify-client.ts` to target your niche, and the junk-filter signals in `lib/candidate-quality.ts`.
 
+## Lead engine
+
+An evidence-based lead qualification and outreach engine for podcasters, video-first creators, and expert-led creators. It runs alongside the CRM and reuses its database, auth, and pipeline.
+
+```
+input (CSV / JSON / candidates table / ingest API) [+ YouTube Data API refresh]
+  → normalize → validate → dedupe → verify evidence → qualify → score
+  → select channels → draft 3×3 sequences → export leads.csv → record run metrics
+```
+
+### Run it
+
+```bash
+npm run db:push                                        # adds the engine tables (additive)
+npm run engine -- --input data/leads-input.csv         # the single command
+```
+
+| Flag | What it does |
+|---|---|
+| `--input <file>` | `.csv` (format below) or `.json` (array of LeadInput objects) |
+| `--provider candidates` | Evaluate the existing review queue instead of a file |
+| `--youtube-ids <file>` | Refresh activity, subscribers, country and language from the YouTube Data API for these channel ids (needs `YOUTUBE_API_KEY`) |
+| `--dry-run` | No database. Processes the file and writes exports to `exports/dry-run/` |
+| `--fixture` | Mark rows as fixtures. Fixtures never appear in the official export. |
+| `--include-non-qualified` | Put every lead in `leads.csv`. `leads-all.csv` always has them all. |
+| `--simulate-failure-after <n>` | Demo: fail after persisting n leads, then rerun to show recovery |
+| `--now <iso>` | Evaluate time windows as of this instant (reproducible demos) |
+| `--purge-fixtures` | Delete fixture leads only |
+
+Each run writes `exports/leads.csv` (official, qualified only), `exports/leads-all.csv` (audit), `exports/validation-report.json`, and `exports/outreach/<lead_id>.md` (every Priority A sequence). It also records a row in `engine_runs`: start and finish time, duration, inserted, updated, unchanged, qualified, unverified, rejected, duplicate and failed counts, API units, cost, and redacted errors. You can see these on **/engine**. The process exits non-zero when a run fails.
+
+Reruns are idempotent. `lead_id` is a hash of `platform:stable_creator_id`, leads upsert on that identity, and the evidence for each lead is replaced inside a single transaction. Messages you've edited or approved are never overwritten.
+
+Try it with the fictional fixtures:
+
+```bash
+npm run engine -- --input tests/fixtures/leads-input.csv --dry-run --now 2026-10-27T12:00:00Z
+```
+
+### Qualification rules (`lib/leads/qualify.ts`)
+
+Every check must pass for `qualified`. A failed **reject** check means the evidence shows the lead doesn't fit. A failed **unverified** check means evidence is missing or malformed. Nothing incomplete is ever auto-qualified, and AI fit scores are not inputs.
+
+| Check | Rule | Fails as |
+|---|---|---|
+| entity | `entity_type = individual`; agency/management/brand/publication/directory/fan_account excluded | reject |
+| segment | podcaster, video_podcaster, youtuber, expert_creator | reject |
+| country | US, CA, GB, IE, AU, NZ, SG with an evidence URL | reject (wrong country) / unverified (no evidence) |
+| language | primary language `en` | reject |
+| profile | profile URL on the platform's domain + valid stable id (e.g. YouTube `UC…` channel id, not an @handle) | unverified |
+| activity | ≥8 items in 30 days **or** ≥2 long-form in 60 days (inclusive, future dates ignored) | reject |
+| monetization | sponsorship/product/service/course/membership/subscription/affiliate/other + evidence URL | unverified |
+| need | content_creation/repurposing/editing/captions/publishing_consistency/content_backlog/team_workflow + evidence URL | unverified |
+| no_guessing | every contact route `source = published` | reject |
+| contact | ≥1 published, business-use route with evidence, active within 60 days | unverified |
+| personalization | a titled content item from the last 60 days | unverified |
+| message | first message passes sender-ID, opt-out, content-reference and length checks | unverified |
+| complete / fresh | required fields present; `checked_date` within 14 days | unverified |
+| unique | no other lead shares the identity, canonical profile URL or a published contact | reject |
+
+Dataset rules (shown on **/leads** and in `validation-report.json`): at least 80% of leads from approved countries, at least 3 approved countries, and no single country over 60%.
+
+### Scoring and Priority A (`lib/leads/scoring.ts`)
+
+The score runs from 0 to 100, and every factor stores its points and the reason for them:
+
+| Factor | Max points |
+|---|---|
+| Fit (segment × audience band) | 20 |
+| Evidence quality | 15 |
+| Activity | 15 |
+| Commercial signals | 15 |
+| Need | 15 |
+| Reachability | 10 |
+| Personalization potential | 10 |
+
+Missing data earns 0 for its factor. Priority A is the top `PRIORITY_A_COUNT` (default 25) **qualified** leads, ranked across the whole dataset with ties broken by `lead_id`. Other qualified leads are B (score ≥ 60) or C. Leads that aren't qualified get N/A.
+
+### Channels and messages
+
+`lib/leads/channels.ts` ranks only published, evidenced, business-use routes that are active within 60 days. It returns the best and backup channels, the reason for each, the evidence used, and a verification status. It never assumes a creator responds on a channel unless there's response evidence.
+
+`lib/leads/messages.ts` drafts one initial message and two follow-ups per channel (email, LinkedIn, Instagram) using deterministic templates. They're built only from stored evidence: they cite a real content item, name the sender (`SENDER_*`), and include opt-out language. Each channel has a length limit: a 300-character LinkedIn connection note, Instagram under 700 characters, email under 1,200. A channel with no verified route gets status `unavailable` with the reason, and no contact details are made up. Edit and approve drafts on **/leads/[id]**. Approving re-runs the checks. **Nothing is sent automatically.**
+
+### CSV input format
+
+One row per creator, UTF-8, with a header row. Unknown columns are ignored. Leave a cell blank if you have no evidence for it; don't guess.
+
+| Column | Example / notes |
+|---|---|
+| `creator_name`, `creator_segment`, `entity_type` | `Jane Doe`, `video_podcaster`, `individual` |
+| `country_iso2`, `country_evidence_url` | `GB`, the about page that states the location |
+| `primary_language` | `en` |
+| `primary_platform`, `profile_url`, `stable_creator_id` | `youtube`, `https://www.youtube.com/channel/UC…`, `UC…` (22 chars after UC) |
+| `followers_or_subscribers` | `42000` |
+| `content_items` | JSON array: `[{"url":"…","title":"…","publishedAt":"2026-10-20","isLongform":true}]` |
+| `monetization_signal`, `monetization_evidence_url` | `sponsorship`, URL of a sponsor read or offer page |
+| `incubrix_need`, `need_signal_text`, `need_evidence_url` | `repurposing`, short paraphrase of the evidence, URL |
+| `email`, `email_evidence_url`, `email_last_active`, `email_source`, `email_business_use` | `published` / `yes` |
+| `linkedin_url`, `linkedin_…` | same suffixes as email |
+| `instagram_handle`, `instagram_…` | same suffixes as email |
+| `checked_date` | date the evidence was last checked by hand or by a provider |
+| `source`, `source_ref` | where the row came from |
+
+Structural errors, such as a missing stable id, an unknown platform or bad JSON, are recorded as `failed` with the line number. Evidence gaps are not errors: they show up in the lead's status.
+
+### Providers
+
+| Provider | Supplies | Notes |
+|---|---|---|
+| CSV / JSON file | Everything | Research exports, licensed data, manual verification |
+| YouTube Data API v3 (`--youtube-ids`) | Subscribers, uploads (dates, titles, long-form ≥ 20 min), self-declared country, audio language | Official API, free quota (about 3 units per channel), counted in `api_units`. Monetization, need and contact evidence still come from the file. |
+| Candidates table (`--provider candidates`) | Existing review-queue rows | Mostly lack evidence, so they come out `unverified` and the queue shows why |
+| `POST /api/engine/ingest` | Rows from any external tool | Bearer `ENGINE_WEBHOOK_SECRET`, up to 2,000 rows per call |
+| Apify webhook (existing) | IG hashtag discovery | Now constant-time authenticated and payload-validated |
+
+When no provider is configured, the engine fails with a clear error. It never substitutes placeholder data.
+
+### Test mode and seed test
+
+`OUTREACH_MODE=test` is the default. In test mode, every real send path refuses recipients that aren't on `SEED_TEST_ALLOWLIST`. That includes the existing Resend composer.
+
+```bash
+npm run seed-test -- start                                   # schedules + sends email via Resend; prints LinkedIn/IG messages to send by hand
+npm run seed-test -- mark-sent --test <id> --channel linkedin
+# click the tracking link in each message (logs a click), reply from the test account, then:
+npm run seed-test -- reply --test <id> --channel email
+npm run seed-test -- report --test <id>                      # expected vs observed; exits 2 until all pass
+```
+
+LinkedIn and Instagram have no permitted API for sending these messages, so those channels use a manual adapter: you send from your own account, then log the send and the reply on **/engine** or from the CLI. Tracking links (`/api/t/<token>`) record each click with a timestamp. A seed test reports **passed** only when every expected event (scheduled, sent, click, reply) has been observed on every allowlisted channel.
+
+### Automated tests
+
+```bash
+npm test
+```
+
+There are 32 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
+
+### Known limitations
+
+- **No real lead data is included.** The engine qualifies only what the evidence supports. Monetization, need and contact evidence must come from permitted research or licensed data. Nothing in this repo produces them, and no scraping is done.
+- The submission workbook isn't in the repo, so it hasn't been filled in. `validation-report.json` holds the numbers you need to reconcile against it.
+- Evidence URLs are checked for format and recency, not fetched. Use the 20-lead audit to spot-check them.
+- Run counts for qualified, unverified and rejected describe the batch. Inserted, updated and unchanged describe what was actually persisted. A failed run records partial persistence.
+- Message templates are in English and deterministic. Optional AI rewriting is intentionally not implemented so that drafts can't contain unsupported claims.
+
 ## Database schema
 
-A single Postgres database with 7 tables: `creators`, `candidates`, `outreach`, `activities`, `tasks`, `tags`, `campaigns`. See `lib/db/schema.ts`.
+A single Postgres database. The original 7 CRM tables plus 6 engine tables (see `lib/db/schema.ts`):
+
+| Table | Holds |
+|---|---|
+| `candidates` | Discovered creators awaiting review, with fit score + reasoning |
+| `creators` | Approved roster: contact info, stage, rates, notes |
+| `outreach` | Drafted / sent pitches and their status |
+| `activities` | Per-creator timeline (stage changes, notes, tags, tasks) |
+| `tasks` | Follow-ups with due dates (manual + auto-created) |
+| `tags` | Free-form labels on creators |
+| `campaigns` | Campaign groupings |
+| `leads` | One row per creator identity (unique on `identity_key` and `canonical_profile_url`): all 30 export fields, qualification checks, score factors, channel recommendation |
+| `lead_evidence` | Evidence items per lead (content, monetization, need, contacts, country, profile) with checked timestamps |
+| `outreach_messages` | 3 channels × 3 steps per lead, unique on `(lead_id, channel, sequence)`, with status, edits, approvals and evidence refs |
+| `engine_runs` | Run history: timings, counts, cost, API units, errors |
+| `seed_tests`, `seed_test_events` | Seed-test runs and their timestamped scheduled/sent/click/reply events |
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `DATABASE_URL is not set` | Create `.env.local` from `.env.example` and add your Neon connection string. |
+| Can't connect to a local Postgres | The app uses `@neondatabase/serverless` over HTTP, which only talks to Neon. Use a free Neon database, or run a local Neon HTTP proxy and configure `neonConfig.fetchEndpoint` in `lib/db/index.ts`. |
+| `db:push` says "No changes detected" | Your tables already match the schema. Nothing to do. |
+| `Another next dev server is already running` | A dev server for this folder is already up (usually on port 3000). Use it, or stop it with the PID shown in the message. |
+| Login page keeps reappearing | The password must exactly match `APP_PASSWORD`. Restart `npm run dev` after editing `.env.local`. |
+| AI scores look generic | Set `ANTHROPIC_API_KEY` and write a specific `BRAND_CONTEXT`. Then re-score with `scripts/rescore-pending.ts`. |
+| Every lead is `unverified` with `message: …` | Set `SENDER_NAME`, `SENDER_ROLE` and `SENDER_COMPANY`. Messages must identify the sender. |
+| "Cannot approve: sender identity not configured" | Same fix, in the environment the web server reads (`.env.local` locally, Vercel env vars in production) |
+| Leads that qualified last week are now `unverified` | Time windows are re-evaluated on every run. Re-check the evidence and update `checked_date`. |
+| `npm run engine` exits 1 | Read the `errors` array in the output, or the run on **/engine**. Fix the cause and rerun: reruns are idempotent. |
+| Seed test refuses to send | The recipient must match an entry in `SEED_TEST_ALLOWLIST` exactly (case and a leading `@` are ignored) |
 
 ---
 
@@ -129,10 +420,14 @@ A single Postgres database with 7 tables: `creators`, `candidates`, `outreach`, 
 This app gates access behind a single shared `APP_PASSWORD` and stores creator contact data. Before running it for real:
 
 - **Set a strong, unique `APP_PASSWORD`** and a `CRON_SECRET` in production.
-- **Never commit secrets or real creator data.** `.env*.local`, `*.db`, and `*.csv` are git-ignored — keep it that way.
+- **Never commit secrets or real creator data.** `.env*.local`, `*.db`, and `*.csv` are git-ignored. Keep it that way.
 - The shared-password gate is intentionally simple. For multi-user or higher-stakes deployments, swap in real auth (e.g. [Clerk](https://clerk.com), Auth0) and per-user roles.
-- You are responsible for how you contact creators — follow applicable marketing/email regulations (CAN-SPAM, GDPR, FTC disclosure rules) in your jurisdiction.
+- Run `npm audit` and update dependencies before deploying.
+- Webhooks (`/api/apify/webhook`, `/api/engine/ingest`) use a constant-time bearer check and reject every request in production when no secret is set. `/api/discover` no longer trusts the client-settable `x-vercel-cron` header.
+- Keep `OUTREACH_MODE=test` until you've reviewed the drafts. The engine never sends on its own, and test mode blocks anyone who isn't on your allowlist.
+- `exports/` is git-ignored because it contains contact data. Engine logs and `engine_runs.errors` redact email addresses and API keys.
+- You are responsible for how you contact creators. Follow applicable marketing/email regulations (CAN-SPAM, GDPR, FTC disclosure rules) in your jurisdiction.
 
 ## License
 
-[MIT](./LICENSE) — free to use, modify, and self-host.
+[MIT](./LICENSE). Free to use, modify, and self-host.

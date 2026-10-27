@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home, Users, Sparkles, Mail, Kanban, LogOut } from "lucide-react"
+import { Home, Users, Sparkles, Mail, Kanban, LogOut, BadgeCheck, Activity } from "lucide-react"
 import { logout } from "@/app/login/actions"
 
 const nav = [
@@ -11,6 +11,8 @@ const nav = [
   { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/creators", label: "Roster", icon: Users },
   { href: "/outreach", label: "Outreach", icon: Mail },
+  { href: "/leads", label: "Leads", icon: BadgeCheck },
+  { href: "/engine", label: "Engine", icon: Activity },
 ]
 
 export function Sidebar() {

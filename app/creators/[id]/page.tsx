@@ -1,5 +1,5 @@
 import { db } from "@/lib/db"
-import { creators, activities, tasks, tags } from "@/lib/db/schema"
+import { creators, activities, tasks, tags, leads } from "@/lib/db/schema"
 import { eq, desc, asc, and } from "drizzle-orm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -24,12 +24,14 @@ export default async function CreatorDetail({ params }: { params: Promise<{ id: 
   const c = (await db.select().from(creators).where(eq(creators.id, id)))[0]
   if (!c) notFound()
 
-  const [creatorActivities, openTasks, doneTasks, creatorTags] = await Promise.all([
+  const [creatorActivities, openTasks, doneTasks, creatorTags, linkedLeads] = await Promise.all([
     db.select().from(activities).where(eq(activities.creatorId, id)).orderBy(desc(activities.createdAt)).limit(50),
     db.select().from(tasks).where(and(eq(tasks.creatorId, id), eq(tasks.completed, false))).orderBy(asc(tasks.dueDate)),
     db.select().from(tasks).where(and(eq(tasks.creatorId, id), eq(tasks.completed, true))).orderBy(desc(tasks.completedAt)).limit(5),
     db.select().from(tags).where(eq(tags.creatorId, id)).orderBy(asc(tags.name)),
+    db.select().from(leads).where(eq(leads.creatorId, id)),
   ])
+  const lead = linkedLeads[0]
 
   const type = (c.flagNotes ?? "").match(/Type:\s*([^|]+)/i)?.[1]?.trim()
   const cleanedNotes = (c.flagNotes ?? "").replace(/Type:\s*[^|]+/i, "").replace(/^\s*\|\s*|\s*\|\s*$/g, "").trim()
@@ -162,6 +164,30 @@ export default async function CreatorDetail({ params }: { params: Promise<{ id: 
               )}
             </CardContent>
           </Card>
+
+          {lead && (
+            <Card>
+              <CardHeader><CardTitle>Qualification evidence</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex gap-2 flex-wrap">
+                  <Badge variant={lead.candidateStatus === "qualified" ? "success" : "warn"}>{lead.candidateStatus}</Badge>
+                  <Badge variant="secondary">Priority {lead.priority ?? "—"}</Badge>
+                  <Badge variant="outline">score {lead.leadScore?.toFixed(1)}</Badge>
+                </div>
+                <div className="text-xs text-zinc-500">Last checked {lead.checkedDate ?? "never"}</div>
+                {[
+                  ["Recent content", lead.recentContentUrl],
+                  ["Monetization", lead.monetizationEvidenceUrl],
+                  ["Need", lead.needEvidenceUrl],
+                  ["Channel", lead.channelEvidenceUrl],
+                ].map(([k, u]) => (
+                  <div key={k} className="text-xs"><span className="text-zinc-500">{k}: </span>{u ? <a href={u} target="_blank" rel="noreferrer" className="underline break-all">{u}</a> : "—"}</div>
+                ))}
+                <div className="text-xs">Best {lead.bestChannel ?? "—"} · backup {lead.backupChannel ?? "—"}</div>
+                <Link href={`/leads/${lead.id}`} className="text-xs underline">Full evidence & sequences →</Link>
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader><CardTitle>Contact</CardTitle></CardHeader>

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, doublePrecision, boolean } from "drizzle-orm/pg-core"
+import { pgTable, text, integer, doublePrecision, boolean, index, uniqueIndex } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 export const creators = pgTable("creators", {
@@ -135,6 +135,159 @@ export const tags = pgTable("tags", {
   name: text("name").notNull(),
   createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lead-generation engine (evidence-based qualification). See lib/leads/.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One row per unique creator identity (platform + stable platform id).
+// lead_id is derived deterministically from the identity so reruns upsert.
+export const leads = pgTable("leads", {
+  id: text("id").primaryKey(),
+  identityKey: text("identity_key").notNull(),
+  canonicalProfileUrl: text("canonical_profile_url").notNull(),
+  creatorName: text("creator_name").notNull(),
+  segment: text("segment"),
+  entityType: text("entity_type"),
+  countryIso2: text("country_iso2"),
+  countryEvidenceUrl: text("country_evidence_url"),
+  primaryLanguage: text("primary_language"),
+  primaryPlatform: text("primary_platform"),
+  profileUrl: text("profile_url"),
+  stableCreatorId: text("stable_creator_id"),
+  followers: integer("followers"),
+  lastContentDate: text("last_content_date"),
+  recentContentUrl: text("recent_content_url"),
+  recentContentTitle: text("recent_content_title"),
+  contentCount30d: integer("content_count_30d"),
+  longformCount60d: integer("longform_count_60d"),
+  monetizationSignal: text("monetization_signal"),
+  monetizationEvidenceUrl: text("monetization_evidence_url"),
+  need: text("need"),
+  needEvidenceUrl: text("need_evidence_url"),
+  bestChannel: text("best_channel"),
+  channelHandleOrUrl: text("channel_handle_or_url"),
+  channelEvidenceUrl: text("channel_evidence_url"),
+  backupChannel: text("backup_channel"),
+  channelRecommendation: text("channel_recommendation"), // JSON: ChannelRecommendation
+  personalizationHook: text("personalization_hook"),
+  firstMessage: text("first_message"),
+  checkedDate: text("checked_date"),
+  priority: text("priority"),
+  leadScore: doublePrecision("lead_score"),
+  scoreFactors: text("score_factors"), // JSON: ScoreFactor[]
+  candidateStatus: text("candidate_status").notNull().default("unverified"), // qualified | unverified | rejected
+  rejectionReason: text("rejection_reason"),
+  qualificationChecks: text("qualification_checks"), // JSON: QualificationCheck[]
+  duplicateCheck: text("duplicate_check"),
+  completenessCheck: text("completeness_check"),
+  inputHash: text("input_hash"),
+  inputJson: text("input_json"), // normalized LeadInput, kept so reruns can re-rank/re-draft
+  source: text("source"),
+  sourceRef: text("source_ref"),
+  isFixture: boolean("is_fixture").default(false),
+  candidateId: text("candidate_id"),
+  creatorId: text("creator_id"),
+  lastRunId: text("last_run_id"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+}, (t) => [
+  uniqueIndex("leads_identity_key_uq").on(t.identityKey),
+  uniqueIndex("leads_canonical_profile_url_uq").on(t.canonicalProfileUrl),
+  index("leads_status_idx").on(t.candidateStatus),
+  index("leads_priority_idx").on(t.priority),
+])
+
+// Evidence items backing a lead: content items, monetization, need, contacts.
+export const leadEvidence = pgTable("lead_evidence", {
+  id: text("id").primaryKey(),
+  leadId: text("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // content | monetization | need | contact | country | profile
+  url: text("url"),
+  label: text("label"),
+  publishedAt: text("published_at"),
+  isLongform: boolean("is_longform"),
+  channel: text("channel"),
+  value: text("value"),
+  lastActiveAt: text("last_active_at"),
+  source: text("source"),
+  checkedAt: text("checked_at"),
+}, (t) => [index("lead_evidence_lead_idx").on(t.leadId)])
+
+// Multi-channel outreach sequences (email / linkedin / instagram × 3 steps).
+export const outreachMessages = pgTable("outreach_messages", {
+  id: text("id").primaryKey(),
+  leadId: text("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(),
+  sequence: integer("sequence").notNull(), // 1 = initial, 2-3 = follow-ups
+  subject: text("subject"),
+  body: text("body"),
+  status: text("status").notNull().default("draft"), // draft | approved | unavailable | test_sent
+  unavailableReason: text("unavailable_reason"),
+  evidenceRefs: text("evidence_refs"), // JSON: string[] of evidence URLs used
+  edited: boolean("edited").default(false),
+  approvedAt: text("approved_at"),
+  createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at"),
+}, (t) => [
+  uniqueIndex("outreach_messages_lead_channel_seq_uq").on(t.leadId, t.channel, t.sequence),
+  index("outreach_messages_lead_idx").on(t.leadId),
+])
+
+// One row per engine run (or seed test run): timings, counts, cost, errors.
+export const engineRuns = pgTable("engine_runs", {
+  id: text("id").primaryKey(),
+  provider: text("provider"),
+  inputRef: text("input_ref"),
+  status: text("status").notNull().default("running"), // running | succeeded | failed
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  durationMs: integer("duration_ms"),
+  totalInput: integer("total_input").default(0),
+  inserted: integer("inserted").default(0),
+  updated: integer("updated").default(0),
+  unchanged: integer("unchanged").default(0),
+  qualified: integer("qualified").default(0),
+  unverified: integer("unverified").default(0),
+  rejected: integer("rejected").default(0),
+  duplicates: integer("duplicates").default(0),
+  failed: integer("failed").default(0),
+  costUsd: doublePrecision("cost_usd").default(0),
+  apiUnits: integer("api_units").default(0),
+  errors: text("errors"), // JSON: { ref, message }[]
+  metrics: text("metrics"), // JSON: extra metrics (distribution, priority counts, export path)
+})
+
+export const seedTests = pgTable("seed_tests", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().default("running"), // running | passed | incomplete
+  notes: text("notes"),
+  createdAt: text("created_at").notNull(),
+  finishedAt: text("finished_at"),
+})
+
+export const seedTestEvents = pgTable("seed_test_events", {
+  id: text("id").primaryKey(),
+  seedTestId: text("seed_test_id").notNull().references(() => seedTests.id, { onDelete: "cascade" }),
+  channel: text("channel").notNull(),
+  recipient: text("recipient").notNull(),
+  eventType: text("event_type").notNull(), // scheduled | sent | click | reply
+  trackingToken: text("tracking_token"),
+  targetUrl: text("target_url"),
+  messageId: text("message_id"),
+  occurredAt: text("occurred_at").notNull(),
+  metadata: text("metadata"),
+}, (t) => [
+  index("seed_test_events_test_idx").on(t.seedTestId),
+  index("seed_test_events_token_idx").on(t.trackingToken),
+])
+
+export type Lead = typeof leads.$inferSelect
+export type LeadEvidenceRow = typeof leadEvidence.$inferSelect
+export type OutreachMessage = typeof outreachMessages.$inferSelect
+export type EngineRun = typeof engineRuns.$inferSelect
+export type SeedTest = typeof seedTests.$inferSelect
+export type SeedTestEvent = typeof seedTestEvents.$inferSelect
 
 export type Creator = typeof creators.$inferSelect
 export type Candidate = typeof candidates.$inferSelect

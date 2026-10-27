@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 import { logActivity, newId } from "@/lib/activity"
 import { OUTREACH_SYSTEM_PROMPT, buildUserPrompt, templateDraft } from "@/lib/outreach-prompt"
+import { assertSendAllowed } from "@/lib/leads/seed-test"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Draft a personalized pitch via Claude (or fall back to a template).
@@ -96,6 +97,15 @@ export async function sendOutreach(opts: {
     revalidatePath("/outreach")
     revalidatePath(`/creators/${opts.creatorId}`)
     return { ok: true, outreachId: id, sent: false, error: !to ? "no recipient email" : !apiKey ? "RESEND_API_KEY not set" : undefined }
+  }
+
+  // Test mode (default): only allowlisted owned accounts can receive real email.
+  try {
+    assertSendAllowed("email", to)
+  } catch (e: any) {
+    await db.insert(outreach).values({ ...baseRow, status: "draft", failedReason: String(e?.message ?? e) } as any)
+    revalidatePath("/outreach")
+    return { ok: false, outreachId: id, sent: false, error: String(e?.message ?? e) }
   }
 
   // Real send path via Resend

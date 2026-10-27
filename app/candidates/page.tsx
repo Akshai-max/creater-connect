@@ -1,8 +1,9 @@
 import { db } from "@/lib/db"
-import { candidates } from "@/lib/db/schema"
+import { candidates, leads } from "@/lib/db/schema"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { eq, desc, ne } from "drizzle-orm"
+import { eq, desc, isNotNull } from "drizzle-orm"
+import { statusVariant } from "@/lib/leads/ui"
 import Link from "next/link"
 import { ExternalLink, Mail, MapPin, Info } from "lucide-react"
 import { formatNumber, relativeDate } from "@/lib/utils"
@@ -24,6 +25,10 @@ export default async function CandidatesPage({ searchParams }: { searchParams: P
   const rejected = await db.select().from(candidates).where(eq(candidates.status, "rejected")).orderBy(desc(candidates.reviewedAt))
 
   const list = tab === "pending" ? pending : tab === "approved" ? approved : rejected
+  // Evidence-based qualification, when the engine has evaluated this candidate
+  // (npm run engine -- --provider candidates). Separate from the AI fit score.
+  const linked = await db.select({ id: leads.id, candidateId: leads.candidateId, status: leads.candidateStatus, reason: leads.rejectionReason }).from(leads).where(isNotNull(leads.candidateId))
+  const qualByCandidate = new Map(linked.map((l) => [l.candidateId!, l]))
 
   return (
     <div className="px-8 py-8 max-w-6xl mx-auto">
@@ -96,6 +101,16 @@ export default async function CandidatesPage({ searchParams }: { searchParams: P
                     <span>· source: {c.sourceDetail ?? c.source}</span>
                     {c.reviewedAt && tab !== "pending" && <span className="text-zinc-400">· {tab} {relativeDate(c.reviewedAt)}</span>}
                   </div>
+                  {(() => {
+                    const q = qualByCandidate.get(c.id)
+                    if (!q) return <div className="text-xs text-zinc-400 mb-2">Qualification: not evaluated yet</div>
+                    return (
+                      <div className="text-xs mb-2 flex items-start gap-2">
+                        <Link href={`/leads/${q.id}`}><Badge variant={statusVariant(q.status)}>{q.status}</Badge></Link>
+                        {q.reason && <span className="text-zinc-600 dark:text-zinc-400 line-clamp-2" title={q.reason}>{q.reason}</span>}
+                      </div>
+                    )
+                  })()}
                   {c.fitReasoning && <p className="text-sm text-zinc-700 dark:text-zinc-300 mb-2">{c.fitReasoning}</p>}
                   {c.outreachAngle && tab === "pending" && (
                     <div className="text-xs text-emerald-700 dark:text-emerald-300 mb-2">

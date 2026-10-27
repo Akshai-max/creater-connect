@@ -49,3 +49,8 @@ next-env.d.ts
 # creator data exports — never commit real PII
 *.csv
 seed-creators.csv
+
+# lead engine output (contains contact data — never commit)
+/exports/
+# fictional test fixtures are safe to commit
+!tests/fixtures/*.csv

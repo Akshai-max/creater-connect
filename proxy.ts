@@ -16,6 +16,10 @@ function isPublic(pathname: string): boolean {
   if (pathname.startsWith("/api/discover")) return true
   // Avatar proxy — must be loadable by <img> tags in any context
   if (pathname.startsWith("/api/avatar/")) return true
+  // Seed-test tracking links are opened from test inboxes (no session cookie)
+  if (pathname.startsWith("/api/t/")) return true
+  // Engine ingest auths via ENGINE_WEBHOOK_SECRET
+  if (pathname.startsWith("/api/engine/ingest")) return true
   return false
 }
 
