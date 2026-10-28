@@ -9,6 +9,7 @@
 // unless the creator's own words state them, so a discovered row is never
 // qualified until a person (or a stated signal) confirms it.
 import { ProviderError } from "./providers"
+import { socialColumns, type InstagramLookup } from "./social"
 
 type Fetcher = (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }>
 const defaultFetcher: Fetcher = (u) => fetch(u, { headers: { "user-agent": "creator-crm-lead-engine/1.0 (+research)" } }) as any
@@ -215,9 +216,16 @@ export function extractSignals(ch: DiscoveredChannel) {
 }
 
 // ── Research row in the engine's CSV input format ────────────────────────────
-export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentHint?: string; countryHint?: string | null }) {
+export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentHint?: string; countryHint?: string | null; instagram?: InstagramLookup | null }) {
   const sig = extractSignals(ch)
-  const email = sig.emails.find((e) => e.businessUse) ?? null
+  const social = socialColumns(ch, opts.instagram ?? null)
+  const ytEmail = sig.emails.find((e) => e.businessUse) ?? null
+  // A business email the creator publishes in their Instagram bio counts too, with that profile as evidence.
+  const email = ytEmail
+    ? { value: ytEmail.value, evidenceUrl: ytEmail.evidenceUrl, lastSeen: ytEmail.lastSeen, quote: ytEmail.quote }
+    : social.bioEmail
+    ? { value: social.bioEmail.value, evidenceUrl: social.bioEmail.evidenceUrl, lastSeen: social.bioEmail.lastActive, quote: "Instagram bio" }
+    : null
   const mon = sig.monetization[0] ?? null
   const need = sig.need[0] ?? null
   const looksPodcast = ch.videos.filter((v) => /\b(podcast|episode|ep\.?\s?\d+|#\d+)\b/i.test(v.title)).length >= Math.max(2, ch.videos.length / 3)
@@ -248,6 +256,7 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     email_source: email ? "published" : "",
     email_business_use: email ? "yes" : "",
     email_quote: email?.quote ?? "",
+    ...social.cols,
     checked_date: today,
     source: ch.source,
     source_ref: ch.channelUrl,
@@ -255,7 +264,8 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
       "CONFIRM: individual creator (not company/network)",
       need ? "" : "FIND: public need evidence",
       mon ? "" : "FIND: monetization evidence",
-      email ? "" : "FIND: published business contact",
+      email || social.cols.instagram_handle || social.cols.linkedin_url ? "" : "FIND: published business contact",
+      ...social.notes,
       ch.country ? "" : "FIND: country evidence",
       "CONFIRM: primary_language",
     ].filter(Boolean).join("; "),

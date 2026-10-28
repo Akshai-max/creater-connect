@@ -139,7 +139,7 @@ These make the AI features actually about *your* brand:
 | `/agent` page or `POST /api/agent/run` | Run the AI agent: proposes picks, drafts and next steps for review (see [AI agent](#ai-agent)) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
-| `npm run discover-youtube -- --ids <file>` | Discover YouTube creators into a research CSV (public RSS, or the official API with `YOUTUBE_API_KEY`) |
+| `npm run discover-youtube -- --ids <file>` | Discover YouTube creators into a research CSV (public RSS, or the official API with `YOUTUBE_API_KEY`), with their published Instagram/LinkedIn links |
 | `npm run bench -- --rows 5000` | Time a normal run and a refresh on synthetic rows (no database) |
 | `npm run workbook -- --template <xlsx> --leads <leads.csv> --out <xlsx>` | Fill the submission workbook from real engine output (needs Python 3 + `openpyxl`) |
 | `npm test` | Run the automated test suite (no database needed) |
@@ -370,7 +370,16 @@ npm run discover-youtube -- --query "podcast;business coach;productivity" --regi
 - sponsor reads, promo and affiliate codes, courses, memberships and newsletters, as monetization evidence;
 - "hiring an editor" style statements, as need evidence;
 - an email published next to "business inquiries", as a published business contact;
-- upload dates, as activity.
+- upload dates, as activity;
+- Instagram (`instagram.com/<handle>`) and LinkedIn (`linkedin.com/in/<slug>`) links in the channel or video descriptions, as backup channels. Posts, reels, hashtag pages and company pages are skipped or ranked below a personal profile.
+
+**Instagram check (optional, official API).** With `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_IG_USER_ID` set, each published Instagram handle is looked up with the Instagram Graph API's [Business Discovery](https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/business_discovery) endpoint, using your own professional account.
+- The date of the latest post becomes `instagram_last_active`.
+- A bio that mentions business, collabs or an email sets `instagram_business_use=yes`. A business email in the bio is used when the channel has none, with the profile as evidence.
+- Personal accounts return nothing and keep a `CHECK` note.
+- Results are cached for 30 days in `data/instagram-cache.json`. Lookups stop at the first rate-limit response, and a rerun carries on. Use `--no-instagram` to skip them.
+
+**LinkedIn** has no permitted API for this, and scraping is against its terms. A LinkedIn link is recorded with the video or page it was published on, but its activity and business use stay empty with a `CONFIRM` note until a person checks the profile. Until then, LinkedIn isn't chosen as a reachable channel.
 
 Rows always start with `entity_type=needs_review` and a `review_notes` column listing what a person must confirm or find. **A discovered row is never qualified without that review.** When video length is unknown (RSS has no durations), the activity check is *unverified*, not rejected.
 
@@ -396,7 +405,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 48 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
+There are 53 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, published Instagram/LinkedIn links and the Instagram Business Discovery lookup, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
 
 ### Scale benchmark
 
