@@ -22,8 +22,8 @@ export default async function DashboardPage() {
     openTasksRaw,
     stageRows,
   ] = await Promise.all([
-    db.select({ c: sql<number>`count(*)` }).from(candidates).where(eq(candidates.status, "pending")).then(r => r[0]?.c ?? 0),
-    db.select({ c: sql<number>`count(*)` }).from(outreach).where(eq(outreach.status, "sent")).then(r => r[0]?.c ?? 0),
+    db.select({ c: sql<number>`count(*)` }).from(candidates).where(eq(candidates.status, "pending")).then(r => Number(r[0]?.c ?? 0)),
+    db.select({ c: sql<number>`count(*)` }).from(outreach).where(eq(outreach.status, "sent")).then(r => Number(r[0]?.c ?? 0)),
     db.select().from(candidates).where(eq(candidates.status, "pending")).orderBy(desc(candidates.fitScore)).limit(5),
     db.select().from(tasks).where(eq(tasks.completed, false)).orderBy(tasks.dueDate),
     db.select({ stage: creators.stage, c: sql<number>`count(*)` }).from(creators).groupBy(creators.stage),
@@ -44,7 +44,7 @@ export default async function DashboardPage() {
 
   // Stage counts
   const stageCounts: Record<string, number> = {}
-  for (const r of stageRows) stageCounts[r.stage ?? "Lead"] = r.c
+  for (const r of stageRows) stageCounts[r.stage ?? "Lead"] = Number(r.c) // count() arrives as a string from Postgres
 
   // Stuck leads: in non-terminal stage > 14 days, no recent activity
   const STUCK_DAYS = 14
