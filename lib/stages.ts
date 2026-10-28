@@ -29,3 +29,20 @@ export const STAGE_COLORS: Record<Stage, string> = {
 export function isStage(s: string | null | undefined): s is Stage {
   return !!s && (STAGES as readonly string[]).includes(s)
 }
+
+// Solid accent per stage (column dot / drop highlight on the pipeline board).
+export const STAGE_ACCENT: Record<Stage, string> = {
+  "Lead": "bg-blue-500",
+  "Outreached": "bg-indigo-500",
+  "Replied": "bg-purple-500",
+  "Negotiating": "bg-amber-500",
+  "Briefed": "bg-orange-500",
+  "Content In": "bg-teal-500",
+  "Live": "bg-green-500",
+  "Paid": "bg-emerald-500",
+  "Past Hire": "bg-zinc-400",
+  "Cold": "bg-red-500",
+}
+
+// Terminal stages: collapsed by default on the board and never flagged as stuck.
+export const CLOSED_STAGES: readonly Stage[] = ["Past Hire", "Cold"]
