@@ -80,4 +80,4 @@ export function toCsv(rows: Record<string, unknown>[]): string {
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\n") + "\n"
 }
 
-export const FIXTURE_SENDER = { name: "Test Sender", role: "Growth Engineer", company: "IncuBrix", website: "https://example.com", postalAddress: "1 Example Street, Example City" }
+export const FIXTURE_SENDER = { name: "Test Sender", role: "Growth Engineer", company: "Demo Studio", website: "https://example.com", postalAddress: "1 Example Street, Example City" }
