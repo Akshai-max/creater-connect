@@ -11,7 +11,7 @@ const SOURCES = [
   { id: "pipeline", label: "Pipeline", hint: "suggest follow-ups and stage moves" },
 ]
 
-export function RunPanel({ apiKey }: { apiKey: boolean }) {
+export function RunPanel({ ready, notReadyHint, slow }: { ready: boolean; notReadyHint: string; slow?: boolean }) {
   const router = useRouter()
   const [pending, start] = useTransition()
   const [sources, setSources] = useState<string[]>(SOURCES.map((s) => s.id))
@@ -52,7 +52,7 @@ export function RunPanel({ apiKey }: { apiKey: boolean }) {
         </label>
         <Button
           className="ml-auto"
-          disabled={pending || !sources.length || !apiKey}
+          disabled={pending || !sources.length || !ready}
           onClick={() => start(async () => {
             setResult(null)
             const r = await startAgentRun({ sources, instructions, maxProposals, includeFixtures })
@@ -61,10 +61,10 @@ export function RunPanel({ apiKey }: { apiKey: boolean }) {
           })}
         >
           {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
-          {pending ? "Working… (can take a few minutes)" : "Run agent"}
+          {pending ? (slow ? "Working… (local model on CPU: can take 10+ minutes)" : "Working… (can take a few minutes)") : "Run agent"}
         </Button>
       </div>
-      {!apiKey && <p className="text-xs text-amber-600 dark:text-amber-400">Set ANTHROPIC_API_KEY in .env.local and restart the dev server to run the agent.</p>}
+      {!ready && <p className="text-xs text-amber-600 dark:text-amber-400">{notReadyHint}</p>}
       {result && <p className="text-sm text-zinc-600 dark:text-zinc-300">{result}</p>}
     </div>
   )

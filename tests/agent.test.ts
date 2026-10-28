@@ -2,7 +2,8 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import fs from "node:fs"
 import { validatePitch, validateRationale, type PitchContext, type PitchDraft } from "../lib/agent/guardrails"
-import { agentModel, costUsd } from "../lib/agent/config"
+import { agentModel, agentProvider, costUsd, ollamaUrl } from "../lib/agent/config"
+import { checkArgs } from "../lib/agent/ollama"
 import { AGENT_SYSTEM_PROMPT, buildTask } from "../lib/agent/prompt"
 import { FIXTURE_SENDER } from "./fixtures/rows"
 
@@ -77,4 +78,34 @@ test("n8n workflow is valid JSON, every connection points at a real node, and no
   }
   assert.match(raw, /\/api\/agent\/run/)
   assert.doesNotMatch(raw, /Bearer\s+\S{8,}|sk-ant|re_[A-Za-z0-9]{10}/)
+})
+
+test("provider switch: Ollama is opt-in and has its own model default", () => {
+  assert.equal(agentProvider({}), "anthropic")
+  assert.equal(agentProvider({ AGENT_PROVIDER: "Ollama" }), "ollama")
+  assert.equal(agentModel({ AGENT_PROVIDER: "ollama" }), "qwen3:4b")
+  assert.equal(agentModel({ AGENT_PROVIDER: "ollama", OLLAMA_MODEL: "llama3.1:8b", AGENT_MODEL: "claude-opus-5-5" }), "llama3.1:8b")
+  assert.equal(ollamaUrl({ OLLAMA_URL: "http://ollama:11434/" }), "http://ollama:11434")
+  assert.equal(costUsd("qwen3:4b", 50_000, 5_000), 0)
+})
+
+test("local-model tool arguments are coerced and checked against the schema", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      subject_type: { type: "string", enum: ["lead", "creator"] },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+      evidence_urls: { type: "array", items: { type: "string" } },
+      confidence: { type: "number", minimum: 0, maximum: 1 },
+      subject: { type: "string" },
+    },
+    required: ["subject_type", "confidence"],
+  }
+  const ok = checkArgs(schema, '{"subject_type":"lead","limit":"5","evidence_urls":"[\\"https://a.example\\"]","confidence":"0.7","subject":"","extra":1}')
+  assert.deepEqual(ok, { args: { subject_type: "lead", limit: 5, evidence_urls: ["https://a.example"], confidence: 0.7 }, problems: [] })
+  const bad = checkArgs(schema, { subject_type: "candidate", limit: 99 })
+  assert.ok(bad.problems.some((p) => /subject_type must be one of/.test(p)), bad.problems.join())
+  assert.ok(bad.problems.some((p) => /limit must be between/.test(p)), bad.problems.join())
+  assert.ok(bad.problems.includes("confidence is required"), bad.problems.join())
+  assert.deepEqual(checkArgs(schema, "not json").problems, ["arguments are not valid JSON"])
 })

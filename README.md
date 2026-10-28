@@ -396,7 +396,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 46 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
+There are 48 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
 
 ### Scale benchmark
 
@@ -436,9 +436,9 @@ You must fill the rest yourself: your personal details, the 01_INSIGHT tab (it n
 
 ## AI agent
 
-An LLM agent (Claude Opus 5.5, tool use) that selects creators, drafts personalised pitches and suggests pipeline next steps. **It only proposes.** Every action waits in the **/agent** review inbox, where you edit, approve or reject it. Approving runs the app's existing actions, so test-mode allowlisting still applies and LinkedIn and Instagram stay manual. Code-enforced checks block invented contacts, invented evidence and messages missing an opt-out or sender line. An importable n8n workflow (`n8n/creator-agent-workflow.json`) runs the agent on a schedule and emails you when there's something to review.
+An LLM agent (Claude Opus 5.5, or a free local model through Ollama in Docker) that selects creators, drafts personalised pitches and suggests pipeline next steps. **It only proposes.** Every action waits in the **/agent** review inbox, where you edit, approve or reject it. Approving runs the app's existing actions, so test-mode allowlisting still applies and LinkedIn and Instagram stay manual. Code-enforced checks block invented contacts, invented evidence and messages missing an opt-out or sender line. An importable n8n workflow (`n8n/creator-agent-workflow.json`) runs the agent on a schedule and emails you when there's something to review.
 
-To use it: set `ANTHROPIC_API_KEY` and `SENDER_*`, run `npm run db:push`, then open **AI agent** in the sidebar. The full guide, including the API, guardrails, n8n setup and costs, is in [`docs/AGENT.md`](docs/AGENT.md).
+To use it: set `SENDER_*` and either `ANTHROPIC_API_KEY` or, for the free option, `AGENT_PROVIDER=ollama` after `docker compose up -d`. Then run `npm run db:push` and open **AI agent** in the sidebar. The full guide, including the API, guardrails, n8n setup and costs, is in [`docs/AGENT.md`](docs/AGENT.md).
 
 ## Database schema
 

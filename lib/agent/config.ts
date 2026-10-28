@@ -8,8 +8,23 @@ export type PitchChannel = (typeof PITCH_CHANNELS)[number]
 export const NEXT_STEP_ACTIONS = ["follow_up", "move_stage", "mark_cold"] as const
 export type NextStepAction = (typeof NEXT_STEP_ACTIONS)[number]
 
-export function agentModel(env: Record<string, string | undefined> = process.env): string {
+// "anthropic" (Claude API, paid) or "ollama" (local model in Docker, free).
+export const AGENT_PROVIDERS = ["anthropic", "ollama"] as const
+export type AgentProvider = (typeof AGENT_PROVIDERS)[number]
+
+type Env = Record<string, string | undefined>
+
+export function agentProvider(env: Env = process.env): AgentProvider {
+  return env.AGENT_PROVIDER?.toLowerCase() === "ollama" ? "ollama" : "anthropic"
+}
+
+export function agentModel(env: Env = process.env): string {
+  if (agentProvider(env) === "ollama") return env.OLLAMA_MODEL || "qwen3:4b"
   return env.AGENT_MODEL || "claude-opus-5-5"
+}
+
+export function ollamaUrl(env: Env = process.env): string {
+  return (env.OLLAMA_URL || "http://localhost:11434").replace(/\/+$/, "")
 }
 
 export const AGENT_LIMITS = {

@@ -1,0 +1,42 @@
+# Local LLM for the AI agent (AGENT_PROVIDER=ollama). Free and private: nothing leaves this machine.
+#   docker compose up -d            start Ollama and pull the model once
+#   docker compose logs -f ollama-pull
+# Change the model with OLLAMA_MODEL in .env (same value as in .env.local).
+services:
+  ollama:
+    image: ollama/ollama:0.40.12
+    container_name: creator-crm-ollama
+    ports:
+      - "127.0.0.1:11434:11434" # localhost only
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      - OLLAMA_KEEP_ALIVE=30m
+      - OLLAMA_CONTEXT_LENGTH=16384
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    # NVIDIA GPU: uncomment (needs the NVIDIA Container Toolkit / Docker Desktop GPU support).
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-pull:
+    image: ollama/ollama:0.40.12
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen3:4b}"]
+    restart: "no"
+
+volumes:
+  ollama:

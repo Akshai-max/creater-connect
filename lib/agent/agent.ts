@@ -1,4 +1,4 @@
-// Outreach agent: Claude (tool runner) reads the CRM through narrow tools and
+// Outreach agent: Claude (tool runner) or a local Ollama model reads the CRM through narrow tools and
 // files proposals for human review. It has no tool that sends, moves a stage or
 // changes a candidate - those happen only when a person approves a proposal.
 import Anthropic from "@anthropic-ai/sdk"
@@ -9,8 +9,9 @@ import { db } from "../db"
 import { activities, agentProposals, agentRuns, candidates, creators, leadEvidence, leads, outreach, outreachMessages, tasks } from "../db/schema"
 import { CHANNEL_LIMITS, OPT_OUT, senderFromEnv } from "../leads/config"
 import { STAGES } from "../stages"
-import { AGENT_LIMITS, AGENT_SOURCES, PITCH_CHANNELS, NEXT_STEP_ACTIONS, agentModel, costUsd, type AgentSource, type PitchChannel } from "./config"
+import { AGENT_LIMITS, AGENT_SOURCES, PITCH_CHANNELS, NEXT_STEP_ACTIONS, agentModel, agentProvider, costUsd, ollamaUrl, type AgentSource, type PitchChannel } from "./config"
 import { validatePitch, validateRationale } from "./guardrails"
+import { runOllamaLoop } from "./ollama"
 import { AGENT_SYSTEM_PROMPT, buildTask } from "./prompt"
 
 const newId = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -366,7 +367,18 @@ export async function runAgent(opts: RunOptions = {}): Promise<RunResult> {
   let summary: string | null = null
   let error: string | null = null
 
-  try {
+  const provider = agentProvider()
+  const tools = buildTools({ id: runId, sources, includeFixtures: !!opts.includeFixtures, maxProposals, made })
+  const task = buildTask(sources, maxProposals, opts.instructions)
+
+  if (provider === "ollama") {
+    try {
+      const r = await runOllamaLoop({ baseUrl: ollamaUrl(), model, system: AGENT_SYSTEM_PROMPT, task, tools, maxIterations: AGENT_LIMITS.maxIterations })
+      ;({ iterations, inputTokens, outputTokens, summary } = r)
+    } catch (e) {
+      error = (e as Error).message
+    }
+  } else try {
     const client = new Anthropic()
     const params = {
       model,
@@ -374,8 +386,8 @@ export async function runAgent(opts: RunOptions = {}): Promise<RunResult> {
       max_iterations: AGENT_LIMITS.maxIterations,
       output_config: { effort: "medium" as const },
       system: [{ type: "text" as const, text: AGENT_SYSTEM_PROMPT, cache_control: { type: "ephemeral" as const } }],
-      tools: buildTools({ id: runId, sources, includeFixtures: !!opts.includeFixtures, maxProposals, made }),
-      messages: [{ role: "user" as const, content: buildTask(sources, maxProposals, opts.instructions) }],
+      tools,
+      messages: [{ role: "user" as const, content: task }],
       // Server-side refusal fallback: on a policy decline the API reruns the turn on a fallback model.
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",

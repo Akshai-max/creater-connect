@@ -4,7 +4,7 @@ import { desc, eq, ne } from "drizzle-orm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { senderFromEnv } from "@/lib/leads/config"
-import { agentModel } from "@/lib/agent/config"
+import { agentModel, agentProvider, ollamaUrl } from "@/lib/agent/config"
 import { relativeDate } from "@/lib/utils"
 import { RunPanel } from "./run-panel"
 import { ProposalCard } from "./proposal-card"
@@ -17,8 +17,11 @@ export default async function AgentPage() {
     db.select().from(agentProposals).where(eq(agentProposals.status, "pending")).orderBy(desc(agentProposals.createdAt)),
     db.select().from(agentProposals).where(ne(agentProposals.status, "pending")).orderBy(desc(agentProposals.decidedAt)).limit(15),
   ])
+  const provider = agentProvider()
+  const ollamaUp = provider === "ollama" ? await ollamaStatus(ollamaUrl(), agentModel()) : null
   const setup = {
     apiKey: !!process.env.ANTHROPIC_API_KEY,
+    ready: provider === "ollama" ? ollamaUp === "ready" : !!process.env.ANTHROPIC_API_KEY,
     sender: !!senderFromEnv(),
     resend: !!process.env.RESEND_API_KEY,
     testMode: (process.env.OUTREACH_MODE ?? "test") !== "live",
@@ -38,16 +41,24 @@ export default async function AgentPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>Run the agent</CardTitle></CardHeader>
-          <CardContent><RunPanel apiKey={setup.apiKey} /></CardContent>
+          <CardContent><RunPanel
+            ready={setup.ready}
+            notReadyHint={provider === "ollama"
+              ? ollamaUp === "no-model" ? `Model ${agentModel()} isn't pulled yet: run "docker compose up ollama-pull".` : `Ollama isn't reachable at ${ollamaUrl()}: run "docker compose up -d".`
+              : "Set ANTHROPIC_API_KEY in .env.local (or AGENT_PROVIDER=ollama) and restart the dev server to run the agent."}
+            slow={provider === "ollama"}
+          /></CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>Setup</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <SetupRow ok={setup.apiKey} label="ANTHROPIC_API_KEY" hint="needed to run the agent" />
+            {provider === "ollama"
+              ? <SetupRow ok={setup.ready} label="Ollama (Docker)" hint={ollamaUp === "ready" ? `${agentModel()} loaded, free and local` : ollamaUp === "no-model" ? "running, model not pulled" : "not reachable: docker compose up -d"} />
+              : <SetupRow ok={setup.apiKey} label="ANTHROPIC_API_KEY" hint="needed to run the agent" />}
             <SetupRow ok={setup.sender} label="SENDER_* identity" hint="pitches are rejected without it" />
             <SetupRow ok={setup.resend} label="RESEND_API_KEY" hint="without it, approved emails save as drafts" />
             <SetupRow ok={setup.testMode} label="Test mode" hint="only allowlisted recipients can be emailed" />
-            <p className="pt-2 text-xs text-zinc-500">Model: <code>{agentModel()}</code> · last {runs.length} runs cost ${spent.toFixed(4)}</p>
+            <p className="pt-2 text-xs text-zinc-500">Provider: {provider} · model <code>{agentModel()}</code> · last {runs.length} runs cost ${spent.toFixed(4)}</p>
           </CardContent>
         </Card>
       </div>
@@ -116,4 +127,17 @@ function SetupRow({ ok, label, hint }: { ok: boolean; label: string; hint: strin
       <div><div className="font-medium">{label}</div><div className="text-xs text-zinc-500">{hint}</div></div>
     </div>
   )
+}
+
+// Is the local Ollama server up, and is the model pulled?
+async function ollamaStatus(baseUrl: string, model: string): Promise<"ready" | "no-model" | "down"> {
+  try {
+    const r = await fetch(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(2000), cache: "no-store" })
+    if (!r.ok) return "down"
+    const { models } = (await r.json()) as { models?: { name: string }[] }
+    const want = model.includes(":") ? model : `${model}:latest`
+    return models?.some((m) => m.name === want) ? "ready" : "no-model"
+  } catch {
+    return "down"
+  }
 }

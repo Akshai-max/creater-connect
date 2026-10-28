@@ -37,13 +37,38 @@ The agent reads the CRM, picks the creators worth acting on, drafts personalised
 ## Setup
 
 1. Set these in `.env.local`:
-   - `ANTHROPIC_API_KEY`;
+   - `ANTHROPIC_API_KEY`, or `AGENT_PROVIDER=ollama` for the free local model (see below);
    - the `SENDER_*` variables (pitches are rejected without them);
    - optionally `RESEND_API_KEY` and `SEED_TEST_ALLOWLIST`.
 2. Run `npm run db:push`. It adds the `agent_runs` and `agent_proposals` tables, and the change is additive.
 3. Open **AI agent** in the sidebar, choose your sources, and click **Run agent**. A run takes about 1–3 minutes.
 
-**Model and cost:** the agent uses `claude-opus-5-5` by default; change it with `AGENT_MODEL`. Each run records its tokens, runtime and cost on **/agent**, priced at $4 per million input tokens and $20 per million output tokens for Opus 5.5. The system prompt is cached between turns. The server-side refusal fallback (`fallbacks: "default"`) is on: if the model declines a request, the API retries it on a fallback model.
+### Free option: a local model with Ollama in Docker
+
+Set `AGENT_PROVIDER=ollama` and the agent runs on a local open model instead of Claude: no API key, no cost, and no CRM data leaves your machine.
+
+```bash
+docker compose up -d                 # starts Ollama on localhost:11434 and pulls OLLAMA_MODEL (default qwen3:4b, ~2.5 GB)
+docker compose logs -f ollama-pull   # watch the first download
+```
+
+Then set these in `.env.local` and restart `npm run dev`:
+
+```
+AGENT_PROVIDER=ollama
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3:4b
+```
+
+The setup card on **/agent** shows whether Ollama is reachable and the model is pulled.
+
+**Trade-offs:**
+- **Speed:** without a GPU, a run can take 10 minutes or more. With an NVIDIA GPU, uncomment the `deploy` block in `docker-compose.yml`.
+- **Quality:** small models are weaker at multi-step tool use and writing. Expect fewer proposals and more drafts that fail the guardrails and get retried. The guardrails are the same for both providers, so a weak model produces fewer proposals, not unsafe ones. Use `qwen3:8b` or larger if you have the RAM.
+- **Loose arguments:** local models get sloppy tool arguments, so the Ollama loop (`lib/agent/ollama.ts`) coerces and validates them against each tool's schema before running it.
+- **Timeouts:** the n8n workflow's 300 s timeout is too short for CPU runs. Raise it in the **Run agent** node.
+
+**Model and cost:** with `AGENT_PROVIDER=anthropic` (the default) the agent uses `claude-opus-5-5` by default; change it with `AGENT_MODEL`. Each run records its tokens, runtime and cost on **/agent**, priced at $4 per million input tokens and $20 per million output tokens for Opus 5.5. The system prompt is cached between turns. The server-side refusal fallback (`fallbacks: "default"`) is on: if the model declines a request, the API retries it on a fallback model.
 
 ## n8n
 
@@ -75,7 +100,9 @@ All three endpoints need `Authorization: Bearer ${AGENT_WEBHOOK_SECRET}`. They'r
 | `lib/agent/agent.ts` | The tools and the run loop (`client.beta.messages.toolRunner`) |
 | `lib/agent/guardrails.ts` | Pure validation |
 | `lib/agent/prompt.ts` | The system prompt and task |
-| `lib/agent/config.ts` | Model, limits and pricing |
+| `lib/agent/ollama.ts` | Tool loop for a local Ollama model |
+| `lib/agent/config.ts` | Provider, model, limits and pricing |
+| `docker-compose.yml` | Ollama service and one-off model pull |
 | `app/agent/` | The `/agent` page, server actions and `decide.ts` (approval logic) |
 | `app/api/agent/` | The n8n endpoints |
 | `n8n/creator-agent-workflow.json` | The importable workflow |
