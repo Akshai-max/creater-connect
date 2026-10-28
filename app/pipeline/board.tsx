@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { AlertTriangle, ArrowRightLeft, ChevronsLeftRight, ListChecks, Mail, Search, X } from "lucide-react"
+import { AlertTriangle, ArrowRightLeft, ChevronsLeftRight, ListChecks, Mail, Minimize2, Search, X } from "lucide-react"
 import { Avatar } from "@/components/avatar"
 import { CLOSED_STAGES, STAGES, STAGE_ACCENT, type Stage } from "@/lib/stages"
 import { cn, formatNumber } from "@/lib/utils"
@@ -36,8 +36,9 @@ const PREFS_KEY = "pipeline-board-prefs"
 const daysIn = (c: BoardCard) => (c.stageChangedAt ? Math.max(0, Math.floor((Date.now() - new Date(c.stageChangedAt).getTime()) / 86_400_000)) : null)
 const isStuck = (c: BoardCard) => !NEVER_STUCK.includes(c.stage) && (daysIn(c) ?? 0) >= STUCK_DAYS
 
-type Prefs = { collapsed: Stage[]; stuckOnly: boolean; platforms: string[] }
-const DEFAULT_PREFS: Prefs = { collapsed: [...CLOSED_STAGES], stuckOnly: false, platforms: [] }
+// compactEmpty: empty stages shrink to thin drop strips so the board fits the screen.
+type Prefs = { collapsed: Stage[]; stuckOnly: boolean; platforms: string[]; compactEmpty: boolean }
+const DEFAULT_PREFS: Prefs = { collapsed: [...CLOSED_STAGES], stuckOnly: false, platforms: [], compactEmpty: true }
 
 function loadPrefs(): Prefs {
   try {
@@ -92,6 +93,8 @@ export function PipelineBoard({ initialCards }: { initialCards: BoardCard[] }) {
   for (const c of visible) byStage.get(c.stage)!.push(c)
   for (const list of byStage.values()) list.sort((a, b) => (daysIn(b) ?? -1) - (daysIn(a) ?? -1) || a.name.localeCompare(b.name))
   const stuckCount = cards.filter(isStuck).length
+  // Empty stages share one slim rail (in pipeline order) so the board fits the screen.
+  const railStages = prefs.compactEmpty ? STAGES.filter((s) => byStage.get(s)!.length === 0) : []
   const filtering = !!q || prefs.platforms.length > 0 || prefs.stuckOnly
 
   // Pointer drag lifecycle: press, then (moved > 5px) drag, then drop on the column under the pointer.
@@ -208,6 +211,9 @@ export function PipelineBoard({ initialCards }: { initialCards: BoardCard[] }) {
         <Chip active={prefs.stuckOnly} onClick={() => setPrefs((p) => ({ ...p, stuckOnly: !p.stuckOnly }))}>
           <AlertTriangle className="h-3 w-3" /> Stuck only
         </Chip>
+        <Chip active={prefs.compactEmpty} onClick={() => setPrefs((p) => ({ ...p, compactEmpty: !p.compactEmpty }))}>
+          <Minimize2 className="h-3 w-3" /> Compact empty
+        </Chip>
         {filtering && (
           <button
             onClick={() => { setQuery(""); setPrefs((p) => ({ ...p, platforms: [], stuckOnly: false })) }}
@@ -220,26 +226,33 @@ export function PipelineBoard({ initialCards }: { initialCards: BoardCard[] }) {
       </div>
 
       {/* Board */}
-      <div ref={boardRef} className={cn("flex min-h-0 flex-1 gap-3 overflow-x-auto pb-4", drag && "cursor-grabbing select-none")}>
+      <div ref={boardRef} className={cn("board-scroll flex min-h-0 flex-1 gap-2 overflow-x-auto pb-3", drag && "cursor-grabbing select-none")}>
         {STAGES.map((stage) => {
           const items = byStage.get(stage)!
-          const collapsed = prefs.collapsed.includes(stage)
+          if (railStages.includes(stage)) return null // shown in the empty-stages rail
+          const manual = prefs.collapsed.includes(stage)
           const isOver = overStage === stage && dragId != null && cards.find((c) => c.id === dragId)?.stage !== stage
-          if (collapsed) {
+          if (manual) {
             return (
               <div
                 key={stage}
                 data-stage={stage}
                 className={cn(
-                  "flex w-11 shrink-0 cursor-pointer flex-col items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-100/60 py-3 transition-colors dark:border-zinc-800 dark:bg-zinc-900/60",
-                  isOver && "border-zinc-400 bg-zinc-200/70 dark:border-zinc-500 dark:bg-zinc-800",
+                  "flex shrink-0 flex-col items-center gap-3 rounded-lg border border-zinc-200 bg-zinc-100/60 py-3 transition-all duration-150 dark:border-zinc-800 dark:bg-zinc-900/40",
+                  "cursor-pointer hover:bg-zinc-200/60 dark:hover:bg-zinc-800/60",
+                  dragId ? "w-14 border-dashed" : "w-10",
+                  isOver && "w-44 border-zinc-400 bg-zinc-200/70 dark:border-zinc-500 dark:bg-zinc-800",
                 )}
                 onClick={() => toggleCollapsed(stage)}
                 title={`Expand ${stage}`}
               >
-                <span className={cn("h-2 w-2 rounded-full", STAGE_ACCENT[stage])} />
-                <span className="rounded-full bg-zinc-200 px-1.5 text-[11px] font-medium tabular-nums dark:bg-zinc-800">{items.length}</span>
-                <span className="text-xs font-semibold uppercase tracking-wide text-zinc-600 [writing-mode:vertical-rl] dark:text-zinc-300">{stage}</span>
+                <span className={cn("h-2 w-2 shrink-0 rounded-full", STAGE_ACCENT[stage])} />
+                <span className="rounded-full bg-zinc-200 px-1.5 text-[11px] font-medium tabular-nums text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">{items.length}</span>
+                {isOver ? (
+                  <span className="px-2 text-center text-xs font-medium text-zinc-700 dark:text-zinc-200">Drop in {stage}</span>
+                ) : (
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 [writing-mode:vertical-rl] dark:text-zinc-400">{stage}</span>
+                )}
               </div>
             )
           }
@@ -250,7 +263,7 @@ export function PipelineBoard({ initialCards }: { initialCards: BoardCard[] }) {
               aria-label={`${stage} column`}
               data-stage={stage}
               className={cn(
-                "flex w-72 shrink-0 flex-col rounded-lg border border-zinc-200 bg-zinc-100/60 transition-colors dark:border-zinc-800 dark:bg-zinc-900/60",
+                "flex min-w-60 max-w-sm flex-1 basis-0 flex-col rounded-lg border border-zinc-200 bg-zinc-100/60 transition-colors dark:border-zinc-800 dark:bg-zinc-900/60",
                 isOver && "border-zinc-400 bg-zinc-200/70 dark:border-zinc-500 dark:bg-zinc-800/80",
               )}
             >
@@ -300,6 +313,38 @@ export function PipelineBoard({ initialCards }: { initialCards: BoardCard[] }) {
             </section>
           )
         })}
+
+        {railStages.length > 0 && (
+          <aside
+            aria-label="Empty stages"
+            className={cn(
+              "flex shrink-0 flex-col gap-1 rounded-lg border border-zinc-200 bg-zinc-100/40 p-1 transition-all duration-150 dark:border-zinc-800 dark:bg-zinc-900/40",
+              dragId ? "w-44 border-dashed" : "w-11",
+            )}
+          >
+            {railStages.map((stage) => {
+              const isOver = overStage === stage && dragId != null
+              return (
+                <div
+                  key={stage}
+                  data-stage={stage}
+                  title={`${stage}: no creators${dragId ? "" : ". Drag a card here to move it."}`}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-2 py-2 text-xs transition-colors",
+                    dragId ? "min-h-10 border border-dashed border-zinc-300 dark:border-zinc-700" : "justify-center",
+                    isOver && "border-zinc-500 bg-zinc-200 dark:border-zinc-500 dark:bg-zinc-800",
+                  )}
+                >
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", STAGE_ACCENT[stage])} />
+                  {dragId && <span className="truncate font-medium text-zinc-600 dark:text-zinc-300">{isOver ? `Drop in ${stage}` : stage}</span>}
+                </div>
+              )
+            })}
+            {!dragId && (
+              <span className="mt-1 text-center text-[10px] uppercase tracking-wide text-zinc-400 [writing-mode:vertical-rl] self-center">Empty stages</span>
+            )}
+          </aside>
+        )}
       </div>
 
       {/* Drag preview */}

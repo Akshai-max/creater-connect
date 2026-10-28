@@ -46,3 +46,19 @@ export const STAGE_ACCENT: Record<Stage, string> = {
 
 // Terminal stages: collapsed by default on the board and never flagged as stuck.
 export const CLOSED_STAGES: readonly Stage[] = ["Past Hire", "Cold"]
+
+// Pipeline stage implied by an outreach event. Only moves a creator forward from
+// the early stages; a creator already further along (Negotiating, Paid, ...) is
+// never pulled back by a pitch's status. Returns null when the stage should stay.
+export type OutreachEvent = "sent" | "replied" | "cold"
+const OUTREACH_TRANSITIONS: Record<OutreachEvent, { from: readonly Stage[]; to: Stage }> = {
+  sent: { from: ["Lead"], to: "Outreached" },
+  replied: { from: ["Lead", "Outreached"], to: "Replied" },
+  cold: { from: ["Lead", "Outreached", "Replied"], to: "Cold" },
+}
+
+export function stageAfterOutreach(current: string | null | undefined, event: OutreachEvent): Stage | null {
+  const stage: Stage = isStage(current) ? current : "Lead"
+  const t = OUTREACH_TRANSITIONS[event]
+  return t.from.includes(stage) ? t.to : null
+}

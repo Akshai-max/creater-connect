@@ -6,6 +6,16 @@ import { revalidatePath } from "next/cache"
 import { logActivity, newId } from "@/lib/activity"
 import { OUTREACH_SYSTEM_PROMPT, buildUserPrompt, templateDraft } from "@/lib/outreach-prompt"
 import { assertSendAllowed } from "@/lib/leads/seed-test"
+import { stageAfterOutreach, type OutreachEvent } from "@/lib/stages"
+import { moveStage } from "@/app/creators/[id]/actions"
+
+// Keep the pipeline in step with the pitch: sent/replied/cold move the creator
+// forward from the early stages (see stageAfterOutreach). Also revalidates /pipeline.
+async function syncStage(creatorId: string, event: OutreachEvent) {
+  const c = (await db.select({ stage: creators.stage }).from(creators).where(eq(creators.id, creatorId)))[0]
+  const next = c ? stageAfterOutreach(c.stage, event) : null
+  if (next) await moveStage(creatorId, next)
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Draft a personalized pitch via Claude (or fall back to a template).
@@ -135,6 +145,7 @@ export async function sendOutreach(opts: {
       body: opts.body.slice(0, 200) + (opts.body.length > 200 ? "…" : ""),
       metadata: { outreachId: id, messageId: result.data?.id, to },
     })
+    await syncStage(opts.creatorId, "sent")
     revalidatePath("/outreach")
     revalidatePath(`/creators/${opts.creatorId}`)
     revalidatePath("/")
@@ -161,6 +172,7 @@ export async function markReplied(outreachId: string) {
     body: `On: ${o.subject}`,
     metadata: { outreachId },
   })
+  await syncStage(o.creatorId, "replied")
   revalidatePath("/outreach")
   revalidatePath(`/creators/${o.creatorId}`)
 }
@@ -169,6 +181,7 @@ export async function markCold(outreachId: string) {
   const o = (await db.select().from(outreach).where(eq(outreach.id, outreachId)))[0]
   if (!o) return
   await db.update(outreach).set({ status: "cold" }).where(eq(outreach.id, outreachId))
+  await syncStage(o.creatorId, "cold")
   revalidatePath("/outreach")
   revalidatePath(`/creators/${o.creatorId}`)
 }
