@@ -1,0 +1,133 @@
+{
+  "name": "Creator CRM – daily AI agent run",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1-5" }] }
+      },
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Weekdays 09:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            { "id": "cfg-1", "name": "crmBaseUrl", "value": "https://your-crm.example.com", "type": "string" },
+            { "id": "cfg-2", "name": "reviewerEmail", "value": "you@yourdomain.com", "type": "string" },
+            { "id": "cfg-3", "name": "maxProposals", "value": 10, "type": "number" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Config (edit me)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [220, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.crmBaseUrl }}/api/agent/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sources: ['leads', 'candidates', 'pipeline'], maxProposals: $json.maxProposals }) }}",
+        "options": {
+          "timeout": 300000,
+          "response": { "response": { "neverError": true, "fullResponse": false } }
+        }
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Run agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "credentials": { "httpHeaderAuth": { "id": "", "name": "Creator CRM agent token" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "id": "c-ok", "leftValue": "={{ $json.status }}", "rightValue": "succeeded", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Run succeeded?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 0]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            { "id": "c-any", "leftValue": "={{ $json.proposals }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Any proposals?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, -100]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config (edit me)').item.json.reviewerEmail }}",
+        "toEmail": "={{ $('Config (edit me)').item.json.reviewerEmail }}",
+        "subject": "={{ $json.proposals }} creator proposal(s) waiting for your review",
+        "emailFormat": "text",
+        "text": "=The CRM agent prepared {{ $json.proposals }} proposal(s). Nothing has been sent. Review, edit and approve them here:\n{{ $json.reviewUrl }}\n\n{{ $json.pending.map(p => '- ' + p.subject + ' · ' + p.kind + ' ' + (p.action || '') + ' (' + Math.round((p.confidence || 0) * 100) + '%): ' + p.rationale).join('\\n') }}\n\nAgent summary:\n{{ $json.summary }}\n\nRun {{ $json.runId }} · cost ${{ $json.costUsd }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Email reviewer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1100, -200],
+      "credentials": { "smtp": { "id": "", "name": "SMTP account" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Config (edit me)').item.json.reviewerEmail }}",
+        "toEmail": "={{ $('Config (edit me)').item.json.reviewerEmail }}",
+        "subject": "CRM agent run failed",
+        "emailFormat": "text",
+        "text": "=The scheduled agent run failed.\n\nError: {{ $json.error || $json.message || JSON.stringify($json) }}\nRun: {{ $json.runId }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Email failure alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [880, 160],
+      "credentials": { "smtp": { "id": "", "name": "SMTP account" } }
+    }
+  ],
+  "connections": {
+    "Weekdays 09:00": { "main": [[{ "node": "Config (edit me)", "type": "main", "index": 0 }]] },
+    "Config (edit me)": { "main": [[{ "node": "Run agent", "type": "main", "index": 0 }]] },
+    "Run agent": { "main": [[{ "node": "Run succeeded?", "type": "main", "index": 0 }]] },
+    "Run succeeded?": {
+      "main": [
+        [{ "node": "Any proposals?", "type": "main", "index": 0 }],
+        [{ "node": "Email failure alert", "type": "main", "index": 0 }]
+      ]
+    },
+    "Any proposals?": { "main": [[{ "node": "Email reviewer", "type": "main", "index": 0 }], []] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

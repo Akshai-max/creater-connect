@@ -282,6 +282,54 @@ export const seedTestEvents = pgTable("seed_test_events", {
   index("seed_test_events_token_idx").on(t.trackingToken),
 ])
 
+// ── AI agent: proposes, never sends. Every proposal waits for human review. ──
+export const agentRuns = pgTable("agent_runs", {
+  id: text("id").primaryKey(),
+  trigger: text("trigger").notNull(), // manual | api (n8n / cron)
+  sources: text("sources").notNull(), // JSON: ("leads" | "candidates" | "pipeline")[]
+  instructions: text("instructions"),
+  status: text("status").notNull().default("running"), // running | succeeded | failed
+  model: text("model").notNull(),
+  startedAt: text("started_at").notNull(),
+  finishedAt: text("finished_at"),
+  durationMs: integer("duration_ms"),
+  iterations: integer("iterations").default(0),
+  inputTokens: integer("input_tokens").default(0),
+  outputTokens: integer("output_tokens").default(0),
+  costUsd: doublePrecision("cost_usd").default(0),
+  proposals: integer("proposals").default(0),
+  summary: text("summary"),
+  error: text("error"),
+})
+
+export const agentProposals = pgTable("agent_proposals", {
+  id: text("id").primaryKey(),
+  runId: text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // pitch | candidate_decision | next_step
+  subjectType: text("subject_type").notNull(), // lead | candidate | creator
+  subjectId: text("subject_id").notNull(),
+  subjectName: text("subject_name").notNull(),
+  action: text("action"), // pitch: channel · candidate: approve|reject · next_step: follow_up|move_stage|mark_cold
+  toStage: text("to_stage"),
+  recipient: text("recipient"), // email / profile URL / handle for pitches
+  subject: text("subject"),
+  body: text("body"),
+  rationale: text("rationale").notNull(),
+  evidenceUrls: text("evidence_urls"), // JSON string[] — all taken from stored evidence
+  confidence: doublePrecision("confidence"),
+  status: text("status").notNull().default("pending"), // pending | approved | rejected | sent | failed
+  reviewNote: text("review_note"),
+  result: text("result"), // what happened on approval
+  createdAt: text("created_at").notNull(),
+  decidedAt: text("decided_at"),
+}, (t) => [
+  index("agent_proposals_status_idx").on(t.status),
+  index("agent_proposals_subject_idx").on(t.subjectType, t.subjectId),
+])
+
+export type AgentRun = typeof agentRuns.$inferSelect
+export type AgentProposal = typeof agentProposals.$inferSelect
+
 export type Lead = typeof leads.$inferSelect
 export type LeadEvidenceRow = typeof leadEvidence.$inferSelect
 export type OutreachMessage = typeof outreachMessages.$inferSelect

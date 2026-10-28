@@ -136,6 +136,7 @@ These make the AI features actually about *your* brand:
 | `npm run db:studio` | Open Drizzle Studio to browse and edit data |
 | `npm run db:seed` | Load sample candidates (and `seed-creators.csv` if present). Safe to re-run. |
 | `npm run discover` | Trigger a discovery run against the local dev server (needs `curl` + `jq`) |
+| `/agent` page or `POST /api/agent/run` | Run the AI agent: proposes picks, drafts and next steps for review (see [AI agent](#ai-agent)) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
 | `npm run discover-youtube -- --ids <file>` | Discover YouTube creators into a research CSV (public RSS, or the official API with `YOUTUBE_API_KEY`) |
@@ -395,7 +396,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 38 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
+There are 46 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
 
 ### Scale benchmark
 
@@ -432,6 +433,12 @@ You must fill the rest yourself: your personal details, the 01_INSIGHT tab (it n
 - Evidence URLs are checked for format and recency, not fetched. Use the 20-lead audit to spot-check them.
 - Run counts for qualified, unverified and rejected describe the batch. Inserted, updated and unchanged describe what was actually persisted. A failed run records partial persistence.
 - Message templates are in English and deterministic. Optional AI rewriting is intentionally not implemented so that drafts can't contain unsupported claims.
+
+## AI agent
+
+An LLM agent (Claude Opus 5.5, tool use) that selects creators, drafts personalised pitches and suggests pipeline next steps. **It only proposes.** Every action waits in the **/agent** review inbox, where you edit, approve or reject it. Approving runs the app's existing actions, so test-mode allowlisting still applies and LinkedIn and Instagram stay manual. Code-enforced checks block invented contacts, invented evidence and messages missing an opt-out or sender line. An importable n8n workflow (`n8n/creator-agent-workflow.json`) runs the agent on a schedule and emails you when there's something to review.
+
+To use it: set `ANTHROPIC_API_KEY` and `SENDER_*`, run `npm run db:push`, then open **AI agent** in the sidebar. The full guide, including the API, guardrails, n8n setup and costs, is in [`docs/AGENT.md`](docs/AGENT.md).
 
 ## Database schema
 
