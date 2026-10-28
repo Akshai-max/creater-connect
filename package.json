@@ -12,6 +12,7 @@
     "discover": "curl -s http://localhost:3000/api/discover | jq .",
     "engine": "node --env-file-if-exists=.env.local --import tsx scripts/run-engine.ts",
     "seed-test": "node --env-file-if-exists=.env.local --import tsx scripts/seed-test.ts",
+    "discover-youtube": "node --env-file-if-exists=.env.local --import tsx scripts/discover.ts",
     "bench": "node --import tsx scripts/bench-scale.ts",
     "workbook": "python scripts/fill_workbook.py",
     "test": "node --import tsx --test tests/*.test.ts",

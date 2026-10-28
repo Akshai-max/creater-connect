@@ -16,7 +16,7 @@ This maps the brief (*IncuBrix 2027 Growth Engineer, Option 1*) and the submissi
 | 8 | Final duplicates | 0 | 0 | Engine MET | `duplicate_check` uses the workbook vocabulary. The engine dedupes by stable id, canonical URL and contact. Tests: `tests/dedupe-export.test.ts`. |
 | 9 | Outreach channels with ready sequences | ≥ 3 | 3 (Email, LinkedIn, Instagram) | Engine MET | `outreach/_SEQUENCES_BY_SEGMENT.md` (3 segments × 3 channels × 3 messages), test in `tests/engine.test.ts` |
 | 10 | Priority A with first message + 2 follow-ups | ≥ 25 | 0 real | **NOT MET** | Generated automatically for the top 25 once 25 real leads qualify. Also needs `SENDER_*` in `.env.local`. |
-| 11 | Seed test passed on 3 own channels | Yes | No | **BLOCKED / YOU** | Needs your own accounts in `SEED_TEST_ALLOWLIST` and `RESEND_API_KEY`. Run `npm run seed-test -- start`, send LinkedIn and Instagram by hand, click the links, reply, then `report --json`. |
+| 11 | Seed test passed on 3 own channels | Yes | No | **BLOCKED / YOU** | Needs your own accounts in `SEED_TEST_ALLOWLIST` and `RESEND_API_KEY`. Step-by-step: `docs/SEED_TEST_RUNBOOK.md`. |
 | 12 | Engine reruns from README | Yes | Yes | **MET** | `npm run engine -- --input <file>`. Normal, repeat, refresh, failure and recovery runs are recorded in `engine_runs` (export with `--runs-json`). |
 
 ## B. Brief final checklist (PDF page 3)
@@ -35,7 +35,7 @@ This maps the brief (*IncuBrix 2027 Growth Engineer, Option 1*) and the submissi
 | leads.csv in the workbook format | MET (format) | 30 columns, workbook dropdown values, sorted by `lead_id`, completeness mirrors the workbook formula (test: "export values match the workbook's dropdowns and formulas") |
 | README | MET | `README.md` |
 | Repository access | YOU | Repo is `github.com/Akshai-max/creater-connect`. It must be private and shared with IncuBrix. |
-| Both video links | **BLOCKED / YOU** | Record (a) a product walkthrough (≤5 min) and (b) a technical demo (≤8 min) with a normal run, a refresh on new input and recovery from a failure. The commands are below. |
+| Both video links | **BLOCKED / YOU** | Record (a) a product walkthrough (≤5 min) and (b) a technical demo (≤8 min) with a normal run, a refresh on new input and recovery from a failure. Scripts with timings and exact commands: `docs/VIDEO_SCRIPTS.md`. |
 
 ## C. Exceptional requirements (optional)
 
@@ -55,7 +55,12 @@ Per the brief: "if a product feature or source is unavailable, record it with th
 | 2026-10-27 | No permitted source supplies monetization, need and contact evidence for 1,000 creators. Platforms' terms forbid scraping, and the YouTube Data API provides activity only. | `lib/leads/providers.ts`; README › Providers |
 | 2026-10-27 | Sender identity (`SENDER_*`) isn't configured, so no message can be generated and nothing can qualify | `.env.example` › LEAD ENGINE |
 | 2026-10-27 | Seed test not run: no owned test accounts are configured | `SEED_TEST_ALLOWLIST` is empty |
-| 2026-10-27 | IncuBrix product not yet used by the engine author, so there are no observations | Workbook tab 01_INSIGHT |
+| 2026-10-27 | IncuBrix product not yet used by the engine author, so there are no observations | Workbook tab 01_INSIGHT. Template: `docs/PRODUCT_INSIGHT_TEMPLATE.md` |
+| 2026-10-28 ~09:00 UTC | ytjobs.co and onlinejobs.ph (sources of need evidence) show bot-verification pages, so they weren't bypassed. josephnoelwalker.com/video returned 404. | `docs/PILOT_RESULTS.md` › Sources that were unavailable |
+
+## E. Real-data pilot (2026-10-28)
+
+16 real creator channels went through `npm run discover-youtube` and the engine: **0 qualified, 12 unverified, 4 rejected (inactive)**. Monetization evidence was found automatically for 12, published business emails for 3, and need evidence for 0. The pilot also found and fixed a bug: unknown video lengths had been rejecting active creators. Details are in `docs/PILOT_RESULTS.md`.
 
 ## Fastest path to MET
 
@@ -69,7 +74,7 @@ Per the brief: "if a product feature or source is unavailable, record it with th
 ## Reproducible verification commands
 
 ```bash
-npm test                     # 33/33 pass
+npm test                     # 38/38 pass
 npm run typecheck            # clean
 npm run build                # succeeds
 npm run bench -- --rows 5000 # synthetic scale run

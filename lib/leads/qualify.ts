@@ -100,11 +100,17 @@ export function qualify(input: LeadInput, ctx: QualifyContext): QualificationRes
   const activity = computeActivity(input, now)
   const active = activity.contentCount30d >= RULES.minContent30d || activity.longformCount60d >= RULES.minLongform60d
   const hasContentEvidence = input.contentItems.length - activity.invalidItems > 0
+  // Items of unknown length in the 60-day window could still be long-form, so a
+  // shortfall is "unverified" (fetch durations), never a rejection.
+  const unknownLength = input.contentItems.filter((i) => i.isLongform === null && withinDays(i.publishedAt, RULES.longformWindowDays, now)).length
+  const couldPass = activity.longformCount60d + unknownLength >= RULES.minLongform60d
   add("activity", `≥${RULES.minContent30d} items/30d or ≥${RULES.minLongform60d} long-form/60d`, active,
-    hasContentEvidence ? "reject" : "unverified",
-    hasContentEvidence
-      ? `only ${activity.contentCount30d} items in 30d and ${activity.longformCount60d} long-form in 60d`
-      : "no valid dated content items in evidence")
+    hasContentEvidence && !couldPass ? "reject" : "unverified",
+    !hasContentEvidence
+      ? "no valid dated content items in evidence"
+      : couldPass
+      ? `only ${activity.contentCount30d} items in 30d and ${activity.longformCount60d} confirmed long-form in 60d; ${unknownLength} items of unknown length (fetch durations with YOUTUBE_API_KEY)`
+      : `only ${activity.contentCount30d} items in 30d and ${activity.longformCount60d} long-form in 60d`)
 
   // 4. Commercial activity.
   const monOk = (MONETIZATION_SIGNALS as readonly string[]).includes(input.monetizationSignal ?? "") && isValidEvidenceUrl(input.monetizationEvidenceUrl)

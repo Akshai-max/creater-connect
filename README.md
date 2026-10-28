@@ -138,6 +138,7 @@ These make the AI features actually about *your* brand:
 | `npm run discover` | Trigger a discovery run against the local dev server (needs `curl` + `jq`) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
+| `npm run discover-youtube -- --ids <file>` | Discover YouTube creators into a research CSV (public RSS, or the official API with `YOUTUBE_API_KEY`) |
 | `npm run bench -- --rows 5000` | Time a normal run and a refresh on synthetic rows (no database) |
 | `npm run workbook -- --template <xlsx> --leads <leads.csv> --out <xlsx>` | Fill the submission workbook from real engine output (needs Python 3 + `openpyxl`) |
 | `npm test` | Run the automated test suite (no database needed) |
@@ -350,6 +351,30 @@ Structural errors, such as a missing stable id, an unknown platform or bad JSON,
 
 When no provider is configured, the engine fails with a clear error. It never substitutes placeholder data.
 
+### Discovery (`npm run discover-youtube`)
+
+Discovery finds candidate creators and writes a **research CSV** in the input format above, which `npm run engine -- --input` reads directly.
+
+```bash
+# No key: YouTube's public per-channel RSS feed (last 15 uploads, exact dates, descriptions)
+npm run discover-youtube -- --ids data/channel-ids.txt --out data/discovered.csv
+# Official API (YOUTUBE_API_KEY): adds durations (long-form), self-declared country, subscribers
+npm run discover-youtube -- --ids data/channel-ids.txt --api --out data/discovered.csv
+# Official API search by topic and region (about 100 quota units per query and region)
+npm run discover-youtube -- --query "podcast;business coach;productivity" --regions US,GB,CA,AU,IE,NZ,SG --out data/discovered.csv
+```
+
+`lib/leads/discovery.ts` pre-fills a row from what the creator publishes, using plain rules (no AI). Each signal keeps the URL it was found on and a quote column for audits:
+
+- sponsor reads, promo and affiliate codes, courses, memberships and newsletters, as monetization evidence;
+- "hiring an editor" style statements, as need evidence;
+- an email published next to "business inquiries", as a published business contact;
+- upload dates, as activity.
+
+Rows always start with `entity_type=needs_review` and a `review_notes` column listing what a person must confirm or find. **A discovered row is never qualified without that review.** When video length is unknown (RSS has no durations), the activity check is *unverified*, not rejected.
+
+A pilot on 16 real channels is written up in [`docs/PILOT_RESULTS.md`](docs/PILOT_RESULTS.md). It found 0 qualified, 12 unverified and 4 inactive, and the missing need evidence is the main gap. The guides for the remaining deliverables are [`docs/SEED_TEST_RUNBOOK.md`](docs/SEED_TEST_RUNBOOK.md), [`docs/VIDEO_SCRIPTS.md`](docs/VIDEO_SCRIPTS.md) and [`docs/PRODUCT_INSIGHT_TEMPLATE.md`](docs/PRODUCT_INSIGHT_TEMPLATE.md).
+
 ### Test mode and seed test
 
 `OUTREACH_MODE=test` is the default. In test mode, every real send path refuses recipients that aren't on `SEED_TEST_ALLOWLIST`. That includes the existing Resend composer.
@@ -370,7 +395,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 33 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
+There are 38 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, and log redaction.
 
 ### Scale benchmark
 

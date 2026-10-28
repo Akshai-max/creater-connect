@@ -36,7 +36,7 @@ export type ContentItem = {
   url: string
   title: string
   publishedAt: string // ISO date or datetime
-  isLongform: boolean
+  isLongform: boolean | null // null = duration unknown (e.g. RSS feeds carry no duration)
 }
 
 export type ContactRoute = {

@@ -183,7 +183,7 @@ function parseContentItems(raw: unknown): ContentItem[] | string {
       url: str(o.url) ?? "",
       title: str(o.title) ?? "",
       publishedAt: str(o.publishedAt ?? o.published_at) ?? "",
-      isLongform: o.isLongform === true || o.longform === true || bool(o.isLongform ?? o.longform),
+      isLongform: o.isLongform === null ? null : o.isLongform === true || o.longform === true || bool(o.isLongform ?? o.longform),
     })
   }
   return items

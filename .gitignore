@@ -57,3 +57,6 @@ seed-creators.csv
 
 # filled submission workbook (contains lead data)
 /submission/
+
+# researched lead inputs (real creators) — never commit
+/data/

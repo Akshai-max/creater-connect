@@ -199,7 +199,7 @@ def main():
     st = wb["00_START"]
     if a.repo_url:
         st["B12"] = a.repo_url
-    st["B16"] = "Claude Code (AI coding assistant) for engine code, tests and docs; Neon Postgres; YouTube Data API v3 (optional); Resend (seed test email). No AI is used to qualify leads."
+    st["B16"] = "Claude Code (AI coding assistant) for engine code, tests, docs and an AI-assisted research pilot; YouTube public RSS feeds and YouTube Data API v3 (discovery); Neon Postgres; Resend (seed test email). No AI is used to qualify leads: qualification is rule-based."
     st["B17"] = "$0"
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
