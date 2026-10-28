@@ -54,7 +54,7 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
           <select
             value={creatorId}
             onChange={(e) => { setCreatorId(e.target.value); setResult(null) }}
-            className="w-full h-9 rounded-md border border-zinc-200 dark:border-zinc-800 bg-transparent px-3 text-sm"
+            className="w-full h-9 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 text-sm"
           >
             <option value="">— select a creator —</option>
             {creators.map((c) => (
