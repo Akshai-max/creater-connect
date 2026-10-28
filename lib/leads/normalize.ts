@@ -230,6 +230,7 @@ export function parseLeadRow(row: Record<string, unknown>, source: string): Pars
     monetizationEvidenceUrl: str(row.monetization_evidence_url),
     need: str(row.incubrix_need)?.toLowerCase() ?? null,
     needSignalText: str(row.need_signal_text),
+    needSource: str(row.need_source)?.toLowerCase() === "observed" ? "observed" : str(row.need_source) ? "stated" : null,
     needEvidenceUrl: str(row.need_evidence_url),
     contacts,
     checkedDate: str(row.checked_date),

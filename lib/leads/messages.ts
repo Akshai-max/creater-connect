@@ -43,7 +43,9 @@ function build(channel: OutreachChannel, seq: 1 | 2 | 3, input: LeadInput, s: Se
   const main = items[0]
   const second = items[1] ?? items[0]
   const vp = valueProp(input.need)
-  const needLine = input.needSignalText ? ` You mentioned ${input.needSignalText.replace(/\.$/, "")}.` : ""
+  // A stated need quotes the creator; an observed one says what we saw on their channel.
+  const needText = input.needSignalText?.replace(/\.$/, "")
+  const needLine = !needText ? "" : input.needSource === "observed" ? ` I noticed ${needText}.` : ` You mentioned ${needText}.`
   const refs = [main.url, input.needEvidenceUrl].filter(Boolean) as string[]
 
   if (channel === "email") {

@@ -65,3 +65,14 @@ test("unknown video lengths make activity unverified, not rejected", () => {
   const k = processBatch([{ row: known, ref: "d2" }], emptyIndex(), { now: FIXTURE_NOW, source: "test", sender: FIXTURE_SENDER }).processed[0]
   assert.equal(k.qualification.checks.find((c) => c.id === "activity")!.severity, "reject")
 })
+
+test("primary language comes from the creator's own YouTube language settings, never a guess", async () => {
+  const { primaryLanguage } = await import("../lib/leads/discovery")
+  const base = parseYouTubeRss(XML, ID)
+  const v = (lang: string | null, i: number) => ({ ...base.videos[0], url: `u${i}`, publishedAt: `2026-10-2${i}`, language: lang })
+  assert.equal(primaryLanguage({ ...base, videos: [v("en-US", 1), v("en", 2), v("en-GB", 3), v("es", 4)] }), "en")
+  assert.equal(primaryLanguage({ ...base, videos: [v("en", 1), v("es", 2), v("es", 3), v("en", 4)] }), null) // no clear majority, no default
+  assert.equal(primaryLanguage({ ...base, defaultLanguage: "en-GB", videos: [v(null, 1)] }), "en") // channel default
+  assert.equal(primaryLanguage(base), null) // RSS: unknown
+  assert.match(toResearchRow(base, { now: FIXTURE_NOW }).review_notes, /CONFIRM: primary_language/)
+})

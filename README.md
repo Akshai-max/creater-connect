@@ -134,8 +134,10 @@ These make the AI features actually about *your* brand:
 | `npm start` | Run the production build |
 | `npm run db:push` | Create/update tables in your database from `lib/db/schema.ts` |
 | `npm run db:studio` | Open Drizzle Studio to browse and edit data |
-| `npm run db:seed` | Load sample candidates (and `seed-creators.csv` if present). Safe to re-run. |
-| `npm run discover` | Trigger a discovery run against the local dev server (needs `curl` + `jq`) |
+| `npm run db:seed` | Load sample candidates (and `seed-creators.csv` if present). Safe to re-run. Don't run it on a production database |
+| `npm run discover` | Trigger the Apify discovery route on the local dev server (needs `curl` + `jq`). Off unless `APIFY_DISCOVERY=enabled` |
+| `npm run purge-demo [-- --yes]` | Remove sample creators, demo candidates and fixture leads, with a backup in `data/backups/` (dry run without `--yes`) |
+| `npm run check-env` | Check `.env.local` as if it were production: lists missing or risky settings by name, never values |
 | `/agent` page or `POST /api/agent/run` | Run the AI agent: proposes picks, drafts and next steps for review (see [AI agent](#ai-agent)) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
@@ -368,7 +370,8 @@ npm run discover-youtube -- --query "podcast;business coach;productivity" --regi
 `lib/leads/discovery.ts` pre-fills a row from what the creator publishes, using plain rules (no AI). Each signal keeps the URL it was found on and a quote column for audits:
 
 - sponsor reads, promo and affiliate codes, courses, memberships and newsletters, as monetization evidence;
-- "hiring an editor" style statements, as need evidence;
+- "hiring an editor" style statements, as **stated** need evidence;
+- when nothing is stated, **observed** needs from the channel's own API data: no uploaded caption track on recent long-form videos (`captions`), long episodes but no Shorts (`repurposing`), or a long gap between uploads (`publishing_consistency`). They're labelled `need_source=observed` with the exact fact in `need_observation`, and messages say "I noticed…" instead of "You mentioned…";
 - an email published next to "business inquiries", as a published business contact;
 - upload dates, as activity;
 - Instagram (`instagram.com/<handle>`) and LinkedIn (`linkedin.com/in/<slug>`) links in the channel or video descriptions, as backup channels. Posts, reels, hashtag pages and company pages are skipped or ranked below a personal profile.
@@ -405,7 +408,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 53 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, published Instagram/LinkedIn links and the Instagram Business Discovery lookup, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
+There are 63 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, published Instagram/LinkedIn links, the Instagram Business Discovery lookup, language detection, observed need signals, the hashed login session, the production env check, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
 
 ### Scale benchmark
 
@@ -448,6 +451,10 @@ You must fill the rest yourself: your personal details, the 01_INSIGHT tab (it n
 An LLM agent (Claude Opus 5.5, or a free local model through Ollama in Docker) that selects creators, drafts personalised pitches and suggests pipeline next steps. **It only proposes.** Every action waits in the **/agent** review inbox, where you edit, approve or reject it. Approving runs the app's existing actions, so test-mode allowlisting still applies and LinkedIn and Instagram stay manual. Code-enforced checks block invented contacts, invented evidence and messages missing an opt-out or sender line. An importable n8n workflow (`n8n/creator-agent-workflow.json`) runs the agent on a schedule and emails you when there's something to review.
 
 To use it: set `SENDER_*` and either `ANTHROPIC_API_KEY` or, for the free option, `AGENT_PROVIDER=ollama` after `docker compose up -d`. Then run `npm run db:push` and open **AI agent** in the sidebar. The full guide, including the API, guardrails, n8n setup and costs, is in [`docs/AGENT.md`](docs/AGENT.md).
+
+## Change notes
+
+Each change has a short note in [`docs/changes/`](docs/changes/README.md): why, what changed, how it was checked.
 
 ## Database schema
 

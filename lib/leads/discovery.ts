@@ -14,13 +14,19 @@ import { socialColumns, type InstagramLookup } from "./social"
 type Fetcher = (url: string) => Promise<{ ok: boolean; status: number; text(): Promise<string>; json(): Promise<any> }>
 const defaultFetcher: Fetcher = (u) => fetch(u, { headers: { "user-agent": "creator-crm-lead-engine/1.0 (+research)" } }) as any
 
-export type DiscoveredVideo = { url: string; title: string; publishedAt: string; description: string; isLongform: boolean | null }
+export type DiscoveredVideo = {
+  url: string; title: string; publishedAt: string; description: string; isLongform: boolean | null
+  language?: string | null // the creator's own audio/metadata language setting (API only)
+  durationSec?: number | null // API only
+  hasCaptions?: boolean | null // an uploaded caption track exists (API contentDetails.caption; auto-captions don't count)
+}
 export type DiscoveredChannel = {
   channelId: string
   title: string
   channelUrl: string
   description: string // channel description (API) or "" (RSS has none)
   country: string | null // self-declared (API only)
+  defaultLanguage?: string | null // channel metadata language (API only)
   subscribers: number | null
   videos: DiscoveredVideo[]
   source: "youtube_rss" | "youtube_api"
@@ -133,6 +139,7 @@ export async function fetchChannelsViaApi(channelIds: string[], opts: { apiKey: 
           channelUrl: `https://www.youtube.com/channel/${item.id}`,
           description: item.snippet?.description ?? "",
           country: item.snippet?.country ?? null,
+          defaultLanguage: item.snippet?.defaultLanguage ?? null,
           subscribers: item.statistics?.hiddenSubscriberCount ? null : Number(item.statistics?.subscriberCount ?? 0),
           videos: (vids.items ?? []).map((v: any) => ({
             url: `https://www.youtube.com/watch?v=${v.id}`,
@@ -140,6 +147,9 @@ export async function fetchChannelsViaApi(channelIds: string[], opts: { apiKey: 
             publishedAt: v.snippet?.publishedAt ?? "",
             description: v.snippet?.description ?? "",
             isLongform: durationSeconds(v.contentDetails?.duration) >= longMin,
+            language: v.snippet?.defaultAudioLanguage ?? v.snippet?.defaultLanguage ?? null,
+            durationSec: v.contentDetails?.duration ? durationSeconds(v.contentDetails.duration) : null,
+            hasCaptions: v.contentDetails?.caption === "true" ? true : v.contentDetails?.caption === "false" ? false : null,
           })),
           source: "youtube_api",
         })
@@ -215,10 +225,86 @@ export function extractSignals(ch: DiscoveredChannel) {
   return { monetization, need, emails }
 }
 
+// ── Observed needs (from public channel data, not the creator's words) ─────────
+// Used only when the creator states no need. Each one is a fact anyone can check on
+// the evidence URL, and is labelled "observed" so messages say "I noticed", never
+// "you mentioned". API data only: RSS has no durations or caption flags.
+export type ObservedNeed = { need: "captions" | "repurposing" | "publishing_consistency"; evidenceUrl: string; text: string; detail: string }
+
+const DAY = 86_400_000
+const SHORT_MAX_SEC = 180
+
+export function observeNeeds(ch: DiscoveredChannel, now: Date): ObservedNeed[] {
+  if (ch.source !== "youtube_api") return []
+  const vids = [...ch.videos].filter((v) => v.publishedAt).sort((a, b) => b.publishedAt.localeCompare(a.publishedAt))
+  const ageDays = (v: DiscoveredVideo) => (now.getTime() - new Date(v.publishedAt).getTime()) / DAY
+  const longRecent = vids.filter((v) => v.isLongform === true && ageDays(v) <= 60)
+  const out: ObservedNeed[] = []
+
+  // Captions: recent long-form videos with no uploaded caption track.
+  const flagged = longRecent.filter((v) => v.hasCaptions != null)
+  if (flagged.length >= 2 && flagged.every((v) => v.hasCaptions === false)) {
+    out.push({
+      need: "captions",
+      evidenceUrl: flagged[0].url,
+      text: `your recent long-form videos, like "${clipTitle(flagged[0].title)}", don't have an uploaded caption track`,
+      detail: `${flagged.length} long-form videos in the last 60 days, none with uploaded captions (YouTube API contentDetails.caption)`,
+    })
+  }
+
+  // Repurposing: long-form output but no Shorts among recent uploads.
+  const withDuration = vids.filter((v) => v.durationSec != null)
+  if (longRecent.length >= 2 && withDuration.length >= 5 && !withDuration.some((v) => v.durationSec! <= SHORT_MAX_SEC)) {
+    out.push({
+      need: "repurposing",
+      evidenceUrl: longRecent[0].url,
+      text: `you publish long episodes like "${clipTitle(longRecent[0].title)}" but no Shorts or clips from them`,
+      detail: `${longRecent.length} long-form videos in the last 60 days and no video of ${SHORT_MAX_SEC}s or less among the last ${withDuration.length} uploads`,
+    })
+  }
+
+  // Consistency: one long gap between uploads, well above the channel's usual rhythm.
+  const recent = vids.filter((v) => ageDays(v) <= 180)
+  if (recent.length >= 4) {
+    const gaps = recent.slice(0, -1).map((v, i) => ({ after: v, before: recent[i + 1], days: (new Date(v.publishedAt).getTime() - new Date(recent[i + 1].publishedAt).getTime()) / DAY }))
+    const sorted = gaps.map((g) => g.days).sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
+    const worst = gaps.reduce((a, b) => (b.days > a.days ? b : a))
+    if (worst.days >= 30 && worst.days >= 3 * Math.max(median, 1)) {
+      out.push({
+        need: "publishing_consistency",
+        evidenceUrl: worst.after.url,
+        text: `there was a ${Math.round(worst.days)}-day gap between uploads before "${clipTitle(worst.after.title)}"`,
+        detail: `${Math.round(worst.days)}-day gap (${worst.before.publishedAt.slice(0, 10)} to ${worst.after.publishedAt.slice(0, 10)}) against a usual gap of ${Math.round(median)} days`,
+      })
+    }
+  }
+  return out
+}
+
+const clipTitle = (t: string) => (t.length > 60 ? `${t.slice(0, 57).trimEnd()}...` : t)
+
+// Primary language from the creator's own YouTube settings: the audio language set on
+// recent videos (majority of at least 3 labelled videos), else the channel's default.
+// Unset everywhere → empty, and a person confirms it.
+export function primaryLanguage(ch: DiscoveredChannel): string | null {
+  const base = (l: string | null | undefined) => (l ? l.toLowerCase().split(/[-_]/)[0] : null)
+  const recent = [...ch.videos].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt)).slice(0, 15)
+  const langs = recent.map((v) => base(v.language)).filter((l): l is string => !!l)
+  if (langs.length >= 3) {
+    const counts = new Map<string, number>()
+    for (const l of langs) counts.set(l, (counts.get(l) ?? 0) + 1)
+    const [top, n] = [...counts].sort((a, b) => b[1] - a[1])[0]
+    if (n / langs.length >= 0.6) return top
+  }
+  return base(ch.defaultLanguage)
+}
+
 // ── Research row in the engine's CSV input format ────────────────────────────
 export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentHint?: string; countryHint?: string | null; instagram?: InstagramLookup | null }) {
   const sig = extractSignals(ch)
   const social = socialColumns(ch, opts.instagram ?? null)
+  const lang = primaryLanguage(ch)
   const ytEmail = sig.emails.find((e) => e.businessUse) ?? null
   // A business email the creator publishes in their Instagram bio counts too, with that profile as evidence.
   const email = ytEmail
@@ -227,7 +313,8 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     ? { value: social.bioEmail.value, evidenceUrl: social.bioEmail.evidenceUrl, lastSeen: social.bioEmail.lastActive, quote: "Instagram bio" }
     : null
   const mon = sig.monetization[0] ?? null
-  const need = sig.need[0] ?? null
+  const stated = sig.need[0] ?? null
+  const observed = stated ? null : observeNeeds(ch, opts.now)[0] ?? null
   const looksPodcast = ch.videos.filter((v) => /\b(podcast|episode|ep\.?\s?\d+|#\d+)\b/i.test(v.title)).length >= Math.max(2, ch.videos.length / 3)
   const items = ch.videos.map((v) => ({ url: v.url, title: v.title, publishedAt: v.publishedAt, isLongform: v.isLongform }))
   const today = opts.now.toISOString().slice(0, 10)
@@ -238,7 +325,7 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     entity_type: "needs_review",
     country_iso2: ch.country ?? opts.countryHint ?? "",
     country_evidence_url: ch.country ? `${ch.channelUrl}/about` : "",
-    primary_language: "",
+    primary_language: lang ?? "",
     primary_platform: "youtube",
     profile_url: ch.channelUrl,
     stable_creator_id: ch.channelId,
@@ -247,9 +334,11 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     monetization_signal: mon?.value ?? "",
     monetization_evidence_url: mon?.evidenceUrl ?? "",
     monetization_quote: mon?.quote ?? "",
-    incubrix_need: need?.value ?? "",
-    need_signal_text: need ? `you mentioned "${need.quote.slice(0, 80)}"` : "",
-    need_evidence_url: need?.evidenceUrl ?? "",
+    incubrix_need: stated?.value ?? observed?.need ?? "",
+    need_signal_text: stated ? `"${stated.quote.slice(0, 80)}"` : observed?.text ?? "",
+    need_evidence_url: stated?.evidenceUrl ?? observed?.evidenceUrl ?? "",
+    need_source: stated ? "stated" : observed ? "observed" : "",
+    need_observation: observed?.detail ?? "",
     email: email?.value ?? "",
     email_evidence_url: email?.evidenceUrl ?? "",
     email_last_active: email?.lastSeen?.slice(0, 10) ?? "",
@@ -262,12 +351,13 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     source_ref: ch.channelUrl,
     review_notes: [
       "CONFIRM: individual creator (not company/network)",
-      need ? "" : "FIND: public need evidence",
+      stated || observed ? "" : "FIND: public need evidence",
+      observed ? `CHECK: need is observed, not stated (${observed.need}): ${observed.detail}` : "",
       mon ? "" : "FIND: monetization evidence",
       email || social.cols.instagram_handle || social.cols.linkedin_url ? "" : "FIND: published business contact",
       ...social.notes,
       ch.country ? "" : "FIND: country evidence",
-      "CONFIRM: primary_language",
+      lang ? "" : "CONFIRM: primary_language",
     ].filter(Boolean).join("; "),
   }
 }

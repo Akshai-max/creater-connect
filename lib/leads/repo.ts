@@ -85,7 +85,7 @@ function evidenceRows(p: ProcessedLead, nowIso: string) {
   if (i.countryEvidenceUrl) add({ kind: "country", url: i.countryEvidenceUrl, value: i.countryIso2 })
   for (const c of i.contentItems) add({ kind: "content", url: c.url, label: c.title, publishedAt: c.publishedAt, isLongform: c.isLongform })
   if (i.monetizationEvidenceUrl || i.monetizationSignal) add({ kind: "monetization", url: i.monetizationEvidenceUrl, value: i.monetizationSignal })
-  if (i.needEvidenceUrl || i.need) add({ kind: "need", url: i.needEvidenceUrl, value: i.need, label: i.needSignalText })
+  if (i.needEvidenceUrl || i.need) add({ kind: "need", url: i.needEvidenceUrl, value: i.need, label: i.needSignalText, source: i.needSource ?? null })
   for (const c of i.contacts) add({ kind: "contact", channel: c.channel, value: c.value, url: c.evidenceUrl, lastActiveAt: c.lastActiveAt, source: c.source, label: c.businessUse ? "business use" : null })
   return rows
 }

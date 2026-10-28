@@ -65,6 +65,9 @@ export type LeadInput = {
   monetizationEvidenceUrl: string | null
   need: string | null
   needSignalText: string | null // short paraphrase of the public need evidence
+  // "stated": the creator said it. "observed": read from their public channel data
+  // (e.g. no caption tracks, no Shorts). Messages phrase the two differently.
+  needSource?: "stated" | "observed" | null
   needEvidenceUrl: string | null
   contacts: ContactRoute[]
   checkedDate: string | null // when a human/provider last verified the evidence
