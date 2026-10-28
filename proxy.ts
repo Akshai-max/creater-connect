@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
-
-const COOKIE_NAME = "crm_auth"
+import { SESSION_COOKIE, isValidSession, passwordMissingInProduction } from "./lib/session"
 
 // Public routes (no password required)
 function isPublic(pathname: string): boolean {
@@ -12,7 +11,7 @@ function isPublic(pathname: string): boolean {
   if (pathname === "/sitemap.xml") return true
   // Apify webhook auths via APIFY_WEBHOOK_SECRET, not the user password
   if (pathname.startsWith("/api/apify/")) return true
-  // Discovery cron auths via CRON_SECRET / x-vercel-cron header
+  // Discovery cron auths via CRON_SECRET
   if (pathname.startsWith("/api/discover")) return true
   // Avatar proxy — must be loadable by <img> tags in any context
   if (pathname.startsWith("/api/avatar/")) return true
@@ -30,14 +29,14 @@ export function proxy(req: NextRequest) {
 
   if (isPublic(pathname)) return NextResponse.next()
 
-  const expected = process.env.APP_PASSWORD
-  if (!expected) {
-    // No password set → app is open. Allow through with a console hint in dev.
-    return NextResponse.next()
+  // Never serve the CRM openly in production.
+  if (passwordMissingInProduction()) {
+    return new NextResponse("APP_PASSWORD is not set. Add it to the server's environment variables.", { status: 503 })
   }
+  const expected = process.env.APP_PASSWORD
+  if (!expected) return NextResponse.next() // local dev without a password
 
-  const cookie = req.cookies.get(COOKIE_NAME)?.value
-  if (cookie === expected) return NextResponse.next()
+  if (isValidSession(req.cookies.get(SESSION_COOKIE)?.value, expected)) return NextResponse.next()
 
   // Redirect to login, preserving target path
   const loginUrl = new URL("/login", req.url)

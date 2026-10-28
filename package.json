@@ -13,6 +13,8 @@
     "engine": "node --env-file-if-exists=.env.local --import tsx scripts/run-engine.ts",
     "seed-test": "node --env-file-if-exists=.env.local --import tsx scripts/seed-test.ts",
     "discover-youtube": "node --env-file-if-exists=.env.local --import tsx scripts/discover.ts",
+    "check-env": "node --import tsx scripts/check-env.ts",
+    "purge-demo":"node --env-file=.env.local --import tsx scripts/purge-demo.ts",
     "bench": "node --import tsx scripts/bench-scale.ts",
     "workbook": "python scripts/fill_workbook.py",
     "test": "node --import tsx --test tests/*.test.ts",

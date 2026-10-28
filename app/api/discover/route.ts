@@ -14,22 +14,25 @@ import {
 } from "@/lib/apify-client"
 import { scoreCandidate } from "@/lib/ai-scoring"
 import { judgeCandidate } from "@/lib/candidate-quality"
+import { checkBearer } from "@/lib/auth"
 
 // Keep this within Vercel function timeout. Default plan: 300s.
 export const maxDuration = 300
 
-// Auth: Vercel cron sends `Authorization: Bearer ${CRON_SECRET}`. Manual hits also work with this.
+// Auth: Vercel cron sends `Authorization: Bearer ${CRON_SECRET}`. Without a secret the
+// route is open only outside production (same rule as the other webhooks).
 function isAuthorized(req: NextRequest): boolean {
-  const expected = process.env.CRON_SECRET
-  if (!expected) return true // No secret set → allow (dev mode)
-  const auth = req.headers.get("authorization") || ""
-  // Vercel Cron sends this header automatically when CRON_SECRET is set. The old
-  // x-vercel-cron bypass was removed: any client can set that header.
-  return auth === `Bearer ${expected}`
+  return checkBearer(req.headers.get("authorization"), process.env.CRON_SECRET).ok
 }
 
 export async function GET(req: NextRequest) {
   if (!isAuthorized(req)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  // This route scrapes Instagram hashtags through Apify. Instagram's terms don't allow
+  // automated collection, so it stays off unless explicitly enabled. Lead discovery for
+  // the engine uses the official YouTube and Instagram Graph APIs instead (npm run discover-youtube).
+  if (process.env.APIFY_DISCOVERY !== "enabled") {
+    return NextResponse.json({ skipped: true, reason: "Apify Instagram discovery is off. Set APIFY_DISCOVERY=enabled to turn it on (check Instagram's terms first)." })
+  }
 
   const url = new URL(req.url)
   const customTags = url.searchParams.get("hashtags")?.split(",").filter(Boolean)
