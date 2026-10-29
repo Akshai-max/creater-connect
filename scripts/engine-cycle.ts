@@ -76,8 +76,26 @@ function appendRows(input: string, idsFile: string, rows: Record<string, unknown
   fs.appendFileSync(idsFile, rows.map((r) => String(r.stable_creator_id)).join("\n") + "\n")
 }
 
-async function discover(): Promise<number> {
-  if (values["no-discover"]) return 0
+// What this cycle's discovery did, recorded with the engine run for the Engine page.
+export type DiscoveryReport = {
+  status: "added" | "none_new" | "skipped" | "failed" | "off"
+  added: number
+  units: number
+  sources: string[] // e.g. 'videos "marketing podcast" GB since …: 40 channels, 38 new'
+  reason?: string // why it was skipped or failed
+  nextAt?: string | null // when the next search is due
+  unitsToday?: number
+  dailyUnits?: number
+}
+export type EntityReport =
+  | { checked: number; individual: number; excluded: number; forReview: number; errors: number; stopped?: string | null }
+  | { failed: string }
+
+const nextDue = (lastAt: string | null | undefined) =>
+  lastAt ? new Date(Date.parse(lastAt) + Number(values["discover-every"]) * 60_000).toISOString() : null
+
+async function discover(): Promise<DiscoveryReport> {
+  if (values["no-discover"]) return { status: "off", added: 0, units: 0, sources: [], reason: "--no-discover" }
   const queries = fs.existsSync(values.queries!)
     ? fs.readFileSync(values.queries!, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim()).filter(Boolean)
     : []
@@ -94,28 +112,32 @@ async function discover(): Promise<number> {
     // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
     featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
   })
+  const budget = { unitsToday: r.state.unitsToday, dailyUnits: Number(values["discover-units"]) }
   if (r.skipped) {
     console.log(`[discover] skipped: ${r.skipped}`)
     writeState({ discovery: r.state })
-    return 0
+    return { status: "skipped", added: 0, units: 0, sources: [], reason: r.skipped, nextAt: nextDue(r.state.lastAt), ...budget }
   }
   if (r.rows.length) appendRows(values.input!, values.ids!, r.rows)
   writeState({ discovery: r.state })
   console.log(`[discover] ${r.searched.join("; ")} → ${r.rows.length} new channels added (${r.units} units, ${r.state.unitsToday}/${values["discover-units"]} today)`)
-  return r.rows.length
+  return { status: r.rows.length ? "added" : "none_new", added: r.rows.length, units: r.units, sources: r.searched, nextAt: nextDue(r.state.lastAt), ...budget }
 }
 
 // The entity check runs as its own script (same Node flags, so .env.local and tsx carry over).
-function classify() {
-  if (values["no-classify"]) return
+function classify(): EntityReport | null {
+  if (values["no-classify"]) return null
   const r = spawnSync(process.execPath, [...process.execArgv, "scripts/classify-entities.ts", "--in", values.input!], { encoding: "utf8" })
   // The script ends with its summary as pretty-printed JSON: "{" and "}" alone on their lines.
   const summary = /^\{\r?\n[\s\S]*^\}\s*$/m.exec(r.stdout ?? "")?.[0]
   try {
     const s = JSON.parse(summary ?? "")
     console.log(`[classify] checked ${s.classified} (cache ${s.fromCache}): ${s.individual} individual, ${s.excluded} excluded, ${s.leftForReview} for review, ${s.errors} errors${s.stoppedReason ? `; stopped: ${s.stoppedReason.slice(0, 160)}` : ""}`)
+    return { checked: s.classified, individual: s.individual, excluded: s.excluded, forReview: s.leftForReview, errors: s.errors, stopped: s.stoppedReason ?? null }
   } catch {
-    console.log(`[classify] failed (exit ${r.status}): ${(r.stderr || r.stdout || "").trim().split("\n").slice(-2).join(" ").slice(0, 300)}`)
+    const why = (r.stderr || r.stdout || "").trim().split("\n").slice(-2).join(" ").slice(0, 300)
+    console.log(`[classify] failed (exit ${r.status}): ${why}`)
+    return { failed: why || `exit ${r.status}` }
   }
 }
 
@@ -125,8 +147,14 @@ async function main() {
     return
   }
   try {
-    try { await discover() } catch (e) { console.log(`[discover] failed: ${(e as Error).message}`) }
-    classify()
+    let discovery: DiscoveryReport
+    try {
+      discovery = await discover()
+    } catch (e) {
+      console.log(`[discover] failed: ${(e as Error).message}`)
+      discovery = { status: "failed", added: 0, units: 0, sources: [], reason: (e as Error).message.slice(0, 300) }
+    }
+    const entityCheck = classify()
 
     const lines = fs.readFileSync(values.ids!, "utf8").split(/\r?\n/).filter((l) => l.replace(/#.*/, "").trim())
     const size = Math.max(1, Number(values.slice))
@@ -141,6 +169,8 @@ async function main() {
       input: values.input,
       youtubeIdsFile: SLICE_FILE,
       log: (m) => console.log(`[engine] ${m}`),
+      extraMetrics: { cycle: { discovery, entityCheck } },
+      extraApiUnits: discovery.units,
     })
     // Advance only after a successful run, so a failed slice is retried next time.
     if (s.status === "succeeded") writeState({ cursor: cursor + slice.length, lastRun: s.runId })

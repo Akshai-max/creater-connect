@@ -12,10 +12,51 @@ import { SeedEventButtons } from "./seed-event-buttons"
 
 export const dynamic = "force-dynamic"
 
+// What the scheduled cycle (scripts/engine-cycle.ts) did before a run; absent for manual runs.
+type CycleMetrics = {
+  discovery?: { status: "added" | "none_new" | "skipped" | "failed" | "off"; added: number; units: number; sources: string[]; reason?: string; nextAt?: string | null; unitsToday?: number; dailyUnits?: number }
+  entityCheck?: { checked: number; individual: number; excluded: number; forReview: number; errors: number; stopped?: string | null } | { failed: string } | null
+}
+const cycleOf = (metrics: string | null) => parseJson<{ cycle?: CycleMetrics }>(metrics, {}).cycle ?? null
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+
+function DiscoveryCell({ cycle }: { cycle: CycleMetrics | null }) {
+  const d = cycle?.discovery
+  if (!d) return <span className="text-zinc-400" title="Manual run: no discovery step">—</span>
+  const e = cycle?.entityCheck
+  const entity = e && "checked" in e && e.checked > 0
+    ? <div className="text-[11px] text-zinc-500">entity check: {e.individual} individual · {e.excluded} excluded · {e.forReview} for review</div>
+    : e && "failed" in e ? <div className="text-[11px] text-red-600 dark:text-red-400">entity check failed: {e.failed}</div> : null
+  if (d.status === "added" || d.status === "none_new") {
+    return (
+      <div>
+        <details>
+          <summary className="cursor-pointer">
+            {d.added > 0 ? <Badge variant="success">+{d.added} new</Badge> : <Badge variant="secondary">searched, 0 new</Badge>}
+            <span className="ml-1 text-[11px] text-zinc-500">{d.units}u</span>
+          </summary>
+          <ul className="mt-1 space-y-0.5 text-[11px] text-zinc-500">{d.sources.map((s, i) => <li key={i}>{s}</li>)}</ul>
+        </details>
+        {entity}
+      </div>
+    )
+  }
+  if (d.status === "failed") return <div><Badge variant="danger">search failed</Badge><div className="text-[11px] text-zinc-500 max-w-56">{d.reason}</div></div>
+  if (d.status === "off") return <span className="text-zinc-400">off</span>
+  return (
+    <div className="text-[11px] text-zinc-500 max-w-56" title={d.reason}>
+      no search{d.nextAt ? ` · next ${hhmm(d.nextAt)}` : ""}
+      {d.reason && /budget/.test(d.reason) && <div className="text-amber-600">daily quota for discovery used</div>}
+    </div>
+  )
+}
+
 export default async function EnginePage() {
   const runs = await db.select().from(engineRuns).orderBy(desc(engineRuns.startedAt)).limit(30)
   const tests = await listSeedTests(5)
   const events = tests.length ? await db.select().from(seedTestEvents) : []
+  const latestCycle = runs.map((r) => cycleOf(r.metrics)).find((c) => c?.discovery) ?? null
+  const lastAdded = runs.find((r) => (cycleOf(r.metrics)?.discovery?.added ?? 0) > 0)
   const totals = runs.reduce((t, r) => ({ cost: t.cost + (r.costUsd ?? 0), units: t.units + (r.apiUnits ?? 0), failed: t.failed + (r.status === "failed" ? 1 : 0) }), { cost: 0, units: 0, failed: 0 })
 
   return (
@@ -26,6 +67,14 @@ export default async function EnginePage() {
           Discovery and refresh run history. Start a run with <code className="text-xs">npm run engine -- --input file.csv</code>.
           {" "}{runs.length} runs shown · {totals.failed} failed · ${totals.cost.toFixed(4)} cost · {totals.units} API units
         </p>
+        {latestCycle?.discovery && (
+          <p className="text-sm text-zinc-500 mt-1">
+            New-channel search: {latestCycle.discovery.nextAt ? <>next at <b className="text-zinc-700 dark:text-zinc-300">{hhmm(latestCycle.discovery.nextAt)}</b></> : "not scheduled"}
+            {latestCycle.discovery.dailyUnits ? ` · ${latestCycle.discovery.unitsToday ?? 0} / ${latestCycle.discovery.dailyUnits} discovery units used today` : ""}
+            {lastAdded ? ` · last added ${cycleOf(lastAdded.metrics)!.discovery!.added} new ${relativeDate(lastAdded.startedAt)}` : ""}.
+            {" "}Runs in between only re-check existing leads (&quot;same&quot;) and refresh a few channels.
+          </p>
+        )}
       </div>
 
       <Card>
@@ -37,6 +86,7 @@ export default async function EnginePage() {
               <TableHead>Status</TableHead>
               <TableHead className="text-right">Runtime</TableHead>
               <TableHead className="text-right">Input</TableHead>
+              <TableHead>Discovery</TableHead>
               <TableHead className="text-right">New / upd / same</TableHead>
               <TableHead className="text-right">Qual / unver / rej</TableHead>
               <TableHead className="text-right">Dupes</TableHead>
@@ -46,7 +96,7 @@ export default async function EnginePage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {runs.length === 0 && <TableRow><TableCell colSpan={10} className="text-center text-sm text-zinc-500 py-6">No runs yet.</TableCell></TableRow>}
+            {runs.length === 0 && <TableRow><TableCell colSpan={11} className="text-center text-sm text-zinc-500 py-6">No runs yet.</TableCell></TableRow>}
             {runs.map((r) => {
               const errs = parseJson<{ ref: string; message: string }[]>(r.errors, [])
               return (
@@ -58,6 +108,7 @@ export default async function EnginePage() {
                   <TableCell><Badge variant={r.status === "succeeded" ? "success" : r.status === "failed" ? "danger" : "warn"}>{r.status}</Badge></TableCell>
                   <TableCell className="text-right tabular-nums">{r.durationMs != null ? `${(r.durationMs / 1000).toFixed(1)}s` : "—"}</TableCell>
                   <TableCell className="text-right tabular-nums">{r.totalInput}</TableCell>
+                  <TableCell className="text-xs align-top"><DiscoveryCell cycle={cycleOf(r.metrics)} /></TableCell>
                   <TableCell className="text-right tabular-nums">{r.inserted} / {r.updated} / {r.unchanged}</TableCell>
                   <TableCell className="text-right tabular-nums">{r.qualified} / {r.unverified} / {r.rejected}</TableCell>
                   <TableCell className="text-right tabular-nums">{r.duplicates}</TableCell>

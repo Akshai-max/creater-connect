@@ -4,6 +4,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Engine page shows discovery](2026-10-29-engine-page-discovery.md): Discovery column (+N new with sources, or no search · next HH:MM), next search and daily units, discovery units counted in run cost |
 | 2026-10-29 | [Discovery finds fewer repeats](2026-10-29-discovery-fewer-repeats.md): newest-video search, worn-out searches dropped, 3 regions × 16 searches, featured channels (43/43 and 12/12 new vs 10/50) |
 | 2026-10-29 | [Sticky sidebar](2026-10-29-sticky-sidebar.md): the menu stays on screen when a long page scrolls |
 | 2026-10-29 | [Cycle finds and checks new channels](2026-10-29-cycle-discovery-and-entity-check.md): depth-first YouTube searches every 2 h (≤ 4,000 units a day), entity check on new rows |

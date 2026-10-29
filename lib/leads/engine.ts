@@ -24,6 +24,10 @@ export type EngineOptions = {
   outDir?: string
   now?: Date
   log?: (msg: string) => void
+  // Recorded with the run: what the scheduled cycle did before it (scripts/engine-cycle.ts), so the
+  // Engine page can show discovery results and count its YouTube units in the run's cost.
+  extraMetrics?: Record<string, unknown>
+  extraApiUnits?: number
 }
 
 export type EngineSummary = {
@@ -61,7 +65,7 @@ export async function runEngine(opts: EngineOptions): Promise<EngineSummary> {
   const errors: EngineSummary["errors"] = []
   const s: EngineSummary = {
     runId, status: "failed", durationMs: 0, totalInput: 0, inserted: 0, updated: 0, unchanged: 0, qualified: 0, unverified: 0,
-    rejected: 0, duplicates: 0, failed: 0, apiUnits: 0, costUsd: 0, priorityA: 0, exportReport: null, outDir, errors,
+    rejected: 0, duplicates: 0, failed: 0, apiUnits: opts.extraApiUnits ?? 0, costUsd: 0, priorityA: 0, exportReport: null, outDir, errors,
   }
   const inputRef = opts.provider === "file" ? path.basename(opts.input ?? "") : "candidates-table"
   const repo = opts.dryRun ? null : await import("./repo")
@@ -143,7 +147,7 @@ export async function runEngine(opts: EngineOptions): Promise<EngineSummary> {
         inserted: s.inserted, updated: s.updated, unchanged: s.unchanged, qualified: s.qualified, unverified: s.unverified,
         rejected: s.rejected, duplicates: s.duplicates, failed: s.failed, costUsd: s.costUsd, apiUnits: s.apiUnits,
         errors: JSON.stringify(errors.slice(0, 200)),
-        metrics: JSON.stringify({ priorityA: s.priorityA, export: s.exportReport && { rows: s.exportReport.rows, problems: s.exportReport.problems, distribution: s.exportReport.distribution } }),
+        metrics: JSON.stringify({ ...(opts.extraMetrics ?? {}), priorityA: s.priorityA, export: s.exportReport && { rows: s.exportReport.rows, problems: s.exportReport.problems, distribution: s.exportReport.distribution } }),
       }).catch((e) => log(`could not record run result: ${redact((e as Error).message)}`))
     }
   }
