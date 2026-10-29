@@ -1,6 +1,6 @@
 # Engine runs every 20 minutes
 
-`npm run engine-cycle` ([scripts/engine-cycle.ts](../../scripts/engine-cycle.ts)) refreshes the next 30 channels from the YouTube Data API, then reruns the engine on `data/discovered-2026-10-29.csv` so every lead is requalified.
+`npm run engine-cycle` ([scripts/engine-cycle.ts](../../scripts/engine-cycle.ts)) refreshes the next 10 channels from the YouTube Data API (30 until the [40-minute discovery change](2026-10-29-cycle-discovery-and-entity-check.md)), then reruns the engine on `data/discovered-2026-10-29.csv` so every lead is requalified.
 
 ## Why a slice and not a full refresh
 

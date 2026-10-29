@@ -43,7 +43,9 @@ export async function discoverStep(opts: {
   const none = (skipped: string) => ({ rows: [], units: 0, searched: [], skipped, state })
 
   if (!opts.queries.length) return none("no discovery queries configured")
-  if (state.lastAt && opts.now.getTime() - Date.parse(state.lastAt) < opts.everyMin * 60_000) {
+  // 2 minutes of slack: the scheduler starts cycles a few seconds early or late, and a strict
+  // 40-minute check would then skip a cycle that starts 39:58 after the last search.
+  if (state.lastAt && opts.now.getTime() - Date.parse(state.lastAt) < opts.everyMin * 60_000 - 2 * 60_000) {
     return none(`last discovery ${Math.round((opts.now.getTime() - Date.parse(state.lastAt)) / 60_000)} min ago (runs every ${opts.everyMin} min)`)
   }
   if (!state.pending?.length && !nextSearch(opts.queries, opts.regions, state)) return none("every query × region has been searched to its last page; add queries to find more")

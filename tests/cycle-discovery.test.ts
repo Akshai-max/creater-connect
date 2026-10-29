@@ -77,3 +77,11 @@ test("channels found beyond the per-step cap are kept and fetched first next tim
   assert.deepEqual(next.rows.map((x) => x.stable_creator_id), ["UC3", "UC4"])
   assert.deepEqual(next.state.pending, [])
 })
+
+test("a cycle that starts a few seconds early still runs the 40-minute discovery", async () => {
+  const state = { ...emptyDiscoveryState(), lastAt: new Date(NOW.getTime() - (40 * 60_000 - 5_000)).toISOString() }
+  const r = await discoverStep({ ...base, searches: 1, everyMin: 40, existingIds: new Set(), state, now: NOW, fetcher: fakeYouTube({}) })
+  assert.equal(r.skipped, null)
+  const tooSoon = await discoverStep({ ...base, searches: 1, everyMin: 40, existingIds: new Set(), state: { ...state, lastAt: new Date(NOW.getTime() - 20 * 60_000).toISOString() }, now: NOW, fetcher: fakeYouTube({}) })
+  assert.match(tooSoon.skipped ?? "", /every 40 min/)
+})

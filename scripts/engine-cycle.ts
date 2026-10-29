@@ -2,8 +2,10 @@
 //   npm run engine-cycle
 // Refreshes the next slice of channels from the YouTube Data API, then reruns the engine on the full
 // input so every lead is requalified. A full refresh of 275 channels costs ~556 quota units, so doing it
-// 72 times a day would blow the 10,000-unit daily quota. A slice per run walks the whole list in a few
-// hours and stays well under it. The cursor lives in data/engine-cycle-state.json.
+// 72 times a day would blow the 10,000-unit daily quota. A 10-channel slice (~21 units) per run walks
+// the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
+// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (1 search every
+// 40 min, ~200 units each, capped at 7,000) ≈ 8,500 of 10,000.
 //
 // Before the refresh, each cycle can also add leads:
 //   1. Discovery (at most every --discover-every minutes, capped at --discover-units YouTube units
@@ -26,12 +28,12 @@ const { values } = parseArgs({
   options: {
     input: { type: "string", default: "data/discovered-2026-10-29.csv" },
     ids: { type: "string", default: "data/channel-ids-2026-10-29.txt" },
-    slice: { type: "string", default: "30" },
+    slice: { type: "string", default: "10" },
     queries: { type: "string", default: "data/discovery-queries.txt" },
     regions: { type: "string", default: "US,GB,CA,AU,IE,NZ,SG" },
-    searches: { type: "string", default: "2" },
-    "discover-every": { type: "string", default: "120" },
-    "discover-units": { type: "string", default: "4000" },
+    searches: { type: "string", default: "1" },
+    "discover-every": { type: "string", default: "40" },
+    "discover-units": { type: "string", default: "7000" },
     "no-discover": { type: "boolean", default: false },
     "no-classify": { type: "boolean", default: false },
   },

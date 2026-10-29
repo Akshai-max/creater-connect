@@ -30,6 +30,20 @@ Each cycle now has two steps before the refresh.
 | discovery: 12 steps × about 300 (2 searches + about 100 for 50 channels), capped | ≤ 4,000 |
 | **total**, against YouTube's 10,000 | **≤ about 8,400** |
 
+## Update: a search every 40 minutes
+You asked for new creators to appear more often. The new defaults:
+
+| | Before | Now |
+|---|---|---|
+| discovery | 2 searches every 120 min, cap 4,000 units a day | **1 search every 40 min**, cap 7,000 |
+| refresh | 30 channels every 20 min (≈ 4,400 units a day) | **10 channels** every 20 min (21 units, ≈ 1,500 a day) |
+| total | ≤ about 8,400 | ≤ about 8,500 of 10,000 |
+
+- **New channels arrive about 3 times as often:** up to 36 searches a day, up to 50 new channels each.
+- **Existing channels refresh less often:** each one's subscribers and upload dates update about once a day (337 ÷ 10 per cycle × 20 min ≈ 11 h), instead of every ~3½ h.
+- **2 minutes of slack:** the 40-minute check accepts a cycle that starts a little early, so the 20-minute schedule doesn't skip every other search.
+- **Checked:** 84/84 tests, including the slack. In a real cycle, 1 search (US page 2) found 50 channels, 10 of them new. The entity check confirmed 2 individuals and excluded 1, and the refresh cost 21 units. The file now holds 337 channels.
+
 ## Checked
 - **Tests:** `tests/cycle-discovery.test.ts` uses a fake YouTube API. It covers picking the pair (wrap-around, skipping finished pairs, all done), keeping only new channels, going one page deeper, the every-120-minutes rule, the daily budget and its Pacific-midnight reset, and carrying over channels beyond the cap. Overall 83/83, plus type-check.
 - **Three real cycles** (`npm run engine-cycle`; the second and third with `--discover-every 0` to skip the wait):
