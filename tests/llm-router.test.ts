@@ -28,7 +28,7 @@ const req = { purpose: "entity_check", subjectRef: "UC1", json: true, messages: 
 
 test("providers come from env in order, and unconfigured ones are skipped", () => {
   assert.deepEqual(providersFromEnv({ GROQ_API_KEY: "a", GEMINI_API_KEY: "b" }).map((p) => p.name), ["groq", "gemini", "ollama"])
-  assert.deepEqual(providersFromEnv({ GEMINI_API_KEY: "b", LLM_PROVIDERS: "gemini,groq" }).map((p) => `${p.name}/${p.model}`), ["gemini/gemini-3.5-flash"])
+  assert.deepEqual(providersFromEnv({ GEMINI_API_KEY: "b", LLM_PROVIDERS: "gemini,groq" }).map((p) => `${p.name}/${p.model}`), ["gemini/gemini-3.5-flash-lite"])
   assert.equal(providersFromEnv({ GROQ_API_KEY: "a", GROQ_MODEL: "llama-x", LLM_PROVIDERS: "groq" })[0].model, "llama-x")
   // Reasoning models: low effort by default so thinking doesn't use up max_tokens; "off" sends nothing.
   assert.equal(providersFromEnv({ GROQ_API_KEY: "a", LLM_PROVIDERS: "groq" })[0].reasoningEffort, "low")
@@ -44,6 +44,11 @@ test("failures are classified: daily quota rests until the reset, per-minute lim
   assert.deepEqual(classifyFailure(429, "Rate limit reached: requests per minute", "7", NOW), { status: "rate_limited", cooldownMs: 7000, message: "rate limited: Rate limit reached: requests per minute" })
   assert.equal(classifyFailure(401, "invalid api key", null, NOW).status, "error")
   assert.match(classifyFailure(404, "model not found", null, NOW).message, /set the \*_MODEL variable/)
+  // Gemini sends no retry-after header; its body says how long to wait.
+  assert.equal(classifyFailure(429, '{"error":{"message":"Quota exceeded for metric: generate_content_free_tier_requests, limit: 5 per minute. Please retry in 12.3s.","status":"RESOURCE_EXHAUSTED"}}', null, NOW).cooldownMs, 12_300)
+  const gemDay = classifyFailure(429, '{"error":{"message":"Generate content requests per day limit exceeded on Free Tier.\nPlease retry in 19h46m2.9s.","status":"RESOURCE_EXHAUSTED"}}', null, NOW)
+  assert.equal(gemDay.status, "quota_exhausted")
+  assert.equal(gemDay.cooldownMs, 71_162_900)
   // Groq's json_validate_failed is about one request: move on, but don't bench the provider.
   const bad = classifyFailure(400, '{"error":{"code":"json_validate_failed"}}', null, NOW)
   assert.equal(bad.status, "invalid_output")

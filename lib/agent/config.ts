@@ -23,7 +23,7 @@ export function agentProvider(env: Env = process.env): AgentProvider {
 export function agentModel(env: Env = process.env): string {
   if (agentProvider(env) === "ollama") return env.OLLAMA_MODEL || "qwen3:4b"
   if (agentProvider(env) === "free") {
-    const names = [env.GROQ_API_KEY ? `groq/${env.GROQ_MODEL || "openai/gpt-oss-120b"}` : null, env.GEMINI_API_KEY ? `gemini/${env.GEMINI_MODEL || "gemini-3.5-flash"}` : null].filter(Boolean)
+    const names = [env.GROQ_API_KEY ? `groq/${env.GROQ_MODEL || "openai/gpt-oss-120b"}` : null, env.GEMINI_API_KEY ? `gemini/${env.GEMINI_MODEL || "gemini-3.5-flash-lite"}` : null].filter(Boolean)
     return names.join(" → ") || "free (no GROQ_API_KEY or GEMINI_API_KEY set)"
   }
   return env.AGENT_MODEL || "claude-opus-5-5"

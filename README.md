@@ -409,7 +409,7 @@ npm run engine -- --input data/discovered.csv
 | Provider | Key | Default model |
 |---|---|---|
 | Groq | `GROQ_API_KEY` ([console.groq.com/keys](https://console.groq.com/keys)) | `openai/gpt-oss-120b` (`GROQ_MODEL`) |
-| Google Gemini | `GEMINI_API_KEY` ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) | `gemini-3.5-flash` (`GEMINI_MODEL`) |
+| Google Gemini | `GEMINI_API_KEY` ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) | `gemini-3.5-flash-lite` (`GEMINI_MODEL`) |
 | Ollama (local) | none | `OLLAMA_MODEL` |
 
 When a provider fails, the router writes the reason and a rest period to `llm_calls`, then moves to the next one:

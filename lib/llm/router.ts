@@ -17,7 +17,7 @@ type Env = Record<string, string | undefined>
 
 export const PROVIDER_DEFAULTS: Record<ProviderName, { baseUrl: string; model: string }> = {
   groq: { baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b" },
-  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.5-flash" },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.5-flash-lite" },
   ollama: { baseUrl: "http://localhost:11434", model: "qwen3:4b" },
 }
 
@@ -48,7 +48,9 @@ export function msUntilPacificMidnight(now: Date): number {
 
 export function classifyFailure(httpStatus: number | null, body: string, retryAfter: string | null, now: Date): Failure {
   const msg = body.replace(/\s+/g, " ").slice(0, 300)
-  const retryMs = retryAfter && /^\d+(\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000) : null
+  // Groq sends retry-after; Gemini sends none but says "Please retry in 12.3s" in the body.
+  const retryMs = retryAfter && /^\d+(\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000)
+    : parseResetMs(/retry in ((?:[\d.]+(?:ms|h|m|s))+)/i.exec(body)?.[1] ?? null)
   if (httpStatus === 429) {
     const daily = /per ?day|daily|PerDay|RESOURCE_EXHAUSTED.*day|tokens per day|requests per day|\bRPD\b|\bTPD\b/i.test(body)
     if (daily) return { status: "quota_exhausted", cooldownMs: retryMs && retryMs > 60_000 ? retryMs : msUntilPacificMidnight(now), message: `daily quota used up: ${msg}` }
@@ -69,7 +71,7 @@ export type AuditRow = {
   httpStatus: number | null; latencyMs: number | null; inputTokens: number | null; outputTokens: number | null
   error: string | null; cooldownUntil: string | null; fallbackFrom: string | null
 }
-export type AuditSink = { write(row: AuditRow): Promise<void>; activeCooldowns(now: Date): Promise<Map<ProviderName, string>> }
+export type AuditSink = { write(row: AuditRow): Promise<void>; activeCooldowns(now: Date, models?: Partial<Record<ProviderName, string>>): Promise<Map<ProviderName, string>> }
 
 export const dbAuditSink: AuditSink = {
   async write(row) {
@@ -77,18 +79,22 @@ export const dbAuditSink: AuditSink = {
     const { llmCalls } = await import("../db/schema")
     await db.insert(llmCalls).values(row)
   },
-  async activeCooldowns(now) {
+  async activeCooldowns(now, models) {
     const { db } = await import("../db")
     const { llmCalls } = await import("../db/schema")
     // Only limits and outages carry over between runs. A bad key (401/403) or model (404)
     // is fixed by changing .env.local, so it mustn't keep the provider benched afterwards.
-    const rows = await db.select({ provider: llmCalls.provider, until: llmCalls.cooldownUntil }).from(llmCalls)
+    // Quotas are per model, so a rest earned by another model (before a *_MODEL change) is ignored.
+    const rows = await db.select({ provider: llmCalls.provider, model: llmCalls.model, until: llmCalls.cooldownUntil }).from(llmCalls)
       .where(and(
         isNotNull(llmCalls.cooldownUntil), gt(llmCalls.cooldownUntil, now.toISOString()),
         or(isNull(llmCalls.httpStatus), notInArray(llmCalls.httpStatus, [401, 403, 404])),
       )).orderBy(desc(llmCalls.at)).limit(50)
     const m = new Map<ProviderName, string>()
-    for (const r of rows) if (r.until && !m.has(r.provider as ProviderName)) m.set(r.provider as ProviderName, r.until)
+    for (const r of rows) {
+      const p = r.provider as ProviderName
+      if (r.until && !m.has(p) && (!models?.[p] || models[p] === r.model)) m.set(p, r.until)
+    }
     // A later successful call clears a cooldown (e.g. a per-minute limit that already passed).
     for (const p of [...m.keys()]) {
       const ok = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(eq(llmCalls.provider, p), eq(llmCalls.status, "ok"))).orderBy(desc(llmCalls.at)).limit(1)
@@ -149,7 +155,8 @@ export class LlmRouter {
     this.loaded = true
     if (this.opts.ignoreCooldowns) return
     try {
-      for (const [p, until] of await this.sink().activeCooldowns(this.now())) this.cooldowns.set(p, until)
+      const models = Object.fromEntries(this.providers.map((p) => [p.name, p.model]))
+      for (const [p, until] of await this.sink().activeCooldowns(this.now(), models)) this.cooldowns.set(p, until)
     } catch { /* audit table unreachable: start fresh rather than fail */ }
   }
 
