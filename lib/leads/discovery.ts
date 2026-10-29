@@ -111,6 +111,26 @@ export async function searchChannels(
   return { channelIds: [...ids], apiUnits: units }
 }
 
+/** One page of a channel search (100 units). `nextPageToken` goes one page deeper next time, so a
+ *  repeated query keeps finding channels it hasn't returned before; null means no more pages. */
+export async function searchChannelPage(
+  query: string,
+  region: string,
+  opts: { apiKey: string | undefined; pageToken?: string | null; maxResults?: number; fetcher?: Fetcher },
+): Promise<{ channelIds: string[]; nextPageToken: string | null; apiUnits: number }> {
+  if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set. Create one at console.cloud.google.com (YouTube Data API v3).")
+  const fetcher = opts.fetcher ?? defaultFetcher
+  const u =
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=channel&maxResults=${Math.min(opts.maxResults ?? 50, 50)}` +
+    `&relevanceLanguage=en&regionCode=${encodeURIComponent(region)}&q=${encodeURIComponent(query)}` +
+    (opts.pageToken ? `&pageToken=${encodeURIComponent(opts.pageToken)}` : "") + `&key=${encodeURIComponent(opts.apiKey)}`
+  const res = await fetcher(u)
+  if (!res.ok) throw new ProviderError("youtube", `search HTTP ${res.status}`)
+  const j = await res.json()
+  const ids = [...new Set<string>((j.items ?? []).map((it: { id?: { channelId?: string } }) => it.id?.channelId).filter(Boolean))]
+  return { channelIds: ids, nextPageToken: j.nextPageToken ?? null, apiUnits: 100 }
+}
+
 export async function fetchChannelsViaApi(channelIds: string[], opts: { apiKey: string | undefined; longformMinSeconds?: number; fetcher?: Fetcher }) {
   if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set.")
   const fetcher = opts.fetcher ?? defaultFetcher

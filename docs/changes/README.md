@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Cycle finds and checks new channels](2026-10-29-cycle-discovery-and-entity-check.md): depth-first YouTube searches every 2 h (≤ 4,000 units a day), entity check on new rows |
+| 2026-10-29 | [Engine runs every 20 minutes](2026-10-29-engine-every-20-min.md): Windows scheduled task, 30-channel refresh slice per run, lock and cursor |
 | 2026-10-29 | [AI usage page redesign](2026-10-29-ai-usage-redesign.md): one-line status, grouped switches, plain-language problems, call log collapsed |
 | 2026-10-29 | [Ollama live status](2026-10-29-ollama-live-status.md): the AI usage page says "unreachable" or "model missing" instead of "available" |
 | 2026-10-29 | [Gemini Flash Lite](2026-10-29-gemini-flash-lite.md): 500 requests a day instead of 20, retry hint read, saved rests per model |
