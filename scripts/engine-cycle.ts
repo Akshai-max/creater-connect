@@ -4,8 +4,9 @@
 // input so every lead is requalified. A full refresh of 275 channels costs ~556 quota units, so doing it
 // 72 times a day would blow the 10,000-unit daily quota. A 10-channel slice (~21 units) per run walks
 // the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
-// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (2 searches and up to
-// 25 featured-channel lookups every 20 min, ~250-400 units each, capped at 7,000) ≈ 8,500 of 10,000.
+// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (up to 500 new channels
+// from 12 searches and 25 featured-channel lookups per step, ~2,300 units each, so about 3 steps right
+// after the quota resets, capped at 7,000) ≈ 8,500 of 10,000.
 //
 // Before the refresh, each cycle can also add leads:
 //   1. Discovery (lib/leads/cycle-discovery.ts; at most every --discover-every minutes, capped at
@@ -37,7 +38,9 @@ const { values } = parseArgs({
     queries: { type: "string", default: "data/discovery-queries.txt" },
     // English results barely differ between regions, so a few regions and more queries find more.
     regions: { type: "string", default: "US,GB,AU" },
-    searches: { type: "string", default: "2" },
+    searches: { type: "string", default: "12" },
+    // New channels added per discovery step; extra ones carry over to the next step.
+    "max-new": { type: "string", default: "500" },
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
     featured: { type: "string", default: "25" },
@@ -50,6 +53,9 @@ const { values } = parseArgs({
     "discover-units": { type: "string", default: "7000" },
     "no-discover": { type: "boolean", default: false },
     "no-classify": { type: "boolean", default: false },
+    // Entity checks per cycle (cached, so the rest are done next cycle). Keeps a 500-channel batch
+    // from holding the cycle lock for an hour while Groq/Gemini rate limits are waited out.
+    "classify-limit": { type: "string", default: "150" },
   },
 })
 
@@ -125,7 +131,7 @@ async function discover(): Promise<DiscoveryReport> {
     queries, regions: values.regions!.split(",").map((x) => x.trim()).filter(Boolean),
     existingIds: new Set(existing.map((x) => x.stable_creator_id)),
     state: readState().discovery ?? emptyDiscoveryState(), now: new Date(), apiKey: process.env.YOUTUBE_API_KEY,
-    searches: Number(values.searches), dailyUnits: Number(values["discover-units"]), everyMin: Number(values["discover-every"]),
+    searches: Number(values.searches), maxNew: Number(values["max-new"]), dailyUnits: Number(values["discover-units"]), everyMin: Number(values["discover-every"]),
     mode, minNew: Number(values["min-new"]), featuredPerStep: Number(values.featured),
     // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
     featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
@@ -150,7 +156,7 @@ async function discover(): Promise<DiscoveryReport> {
 // The entity check runs as its own script (same Node flags, so .env.local and tsx carry over).
 function classify(): EntityReport | null {
   if (values["no-classify"]) return null
-  const r = spawnSync(process.execPath, [...process.execArgv, "scripts/classify-entities.ts", "--in", values.input!], { encoding: "utf8" })
+  const r = spawnSync(process.execPath, [...process.execArgv, "scripts/classify-entities.ts", "--in", values.input!, "--limit", values["classify-limit"]!], { encoding: "utf8" })
   // The script ends with its summary as pretty-printed JSON: "{" and "}" alone on their lines.
   const summary = /^\{\r?\n[\s\S]*^\}\s*$/m.exec(r.stdout ?? "")?.[0]
   try {

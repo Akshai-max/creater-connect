@@ -4,6 +4,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Discovery: 500 per step](2026-10-29-discovery-500-per-step.md): `--max-new 500`, 12 searches a step, entity check capped at 150 model calls a cycle (limit now counts calls, not rows) |
 | 2026-10-29 | [More discovery per day](2026-10-29-more-discovery-per-day.md): search every 20 min instead of 40, 2 searches and 25 featured lookups per step, same 7,000-unit cap |
 | 2026-10-29 | [Leads: New tab](2026-10-29-leads-new-tab.md): leads added in the last 2 h / 24 h / 7 days, newest first, with an Added column |
 | 2026-10-29 | [Leads page UI](2026-10-29-leads-page-ui.md): search, country filter, sortable headers, tab counts, a Why column, validation checklist |

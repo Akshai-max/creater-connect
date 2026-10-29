@@ -6,7 +6,7 @@
 //   npm run engine -- --input data/discovered.csv
 // Options:
 //   --out <file>      write elsewhere instead of in place
-//   --limit <n>       classify at most n rows this run (resume later; results are cached)
+//   --limit <n>       at most n model calls this run (cached answers don't count; resume later)
 //   --all             also classify rows that fail other checks (default: only rows
 //                     where the entity type is what decides the outcome)
 // Rows a person already set (entity_type other than needs_review) are never changed.
@@ -108,10 +108,13 @@ async function main() {
 
   let totalMs = 0
   let consecutiveErrors = 0
-  for (const row of todo.slice(0, limit)) {
+  for (const row of todo) {
     const src = sourceOf(row)
     const key = createHash("sha1").update([row.stable_creator_id, src.title, src.description, src.videos.map((v) => v.title).join("|")].join("\n")).digest("hex")
     const cached = cache[key]
+    // The limit counts model calls: rows still left for review come back from the cache every run
+    // and sit before newly added rows, so a row limit would mostly re-read the cache.
+    if (!cached?.model && stats.classified + stats.errors >= limit) continue
     let v = cached?.model ? verdictFrom(src, cached, cached.model) : null
     if (v) stats.fromCache++
     else {
