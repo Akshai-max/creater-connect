@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { AllProvidersUnavailable, LlmRouter, classifyFailure, msUntilPacificMidnight, providersFromEnv, type AuditRow, type AuditSink, type ProviderCfg } from "../lib/llm/router"
+import { AllProvidersUnavailable, LlmRouter, classifyFailure, msUntilPacificMidnight, parseResetMs, providersFromEnv, type AuditRow, type AuditSink, type ProviderCfg } from "../lib/llm/router"
 
 const NOW = new Date("2026-10-29T12:00:00Z")
 const memorySink = (rows: AuditRow[] = []): AuditSink & { rows: AuditRow[] } => ({
@@ -113,4 +113,38 @@ test("tool calls only go to providers that support them", async () => {
   assert.equal(r.provider, "groq")
   assert.equal(r.message.tool_calls?.[0].function.name, "list_qualified_leads")
   assert.deepEqual(sink.rows.map((x) => x.provider), ["groq"]) // ollama never called
+})
+
+test("Groq's rate-limit headers pace the next call instead of earning a 429", async () => {
+  assert.equal(parseResetMs("7.66s"), 7660)
+  assert.equal(parseResetMs("2m59.56s"), 179_560)
+  assert.equal(parseResetMs("292.5ms"), 293)
+  assert.equal(parseResetMs(null), null)
+
+  const headers: Record<string, string>[] = [
+    { "x-ratelimit-remaining-tokens": "120", "x-ratelimit-reset-tokens": "1.5s", "x-ratelimit-remaining-requests": "900" },
+    { "x-ratelimit-remaining-tokens": "7800", "x-ratelimit-reset-tokens": "0.2s", "x-ratelimit-remaining-requests": "899" },
+    { "x-ratelimit-remaining-tokens": "10", "x-ratelimit-reset-tokens": "45s" },
+    // Groq's real shape: reset-tokens is the time to refill the whole 8,000, so wait only for
+    // the share this request needs: (est 205 - 0) / (8000 - 0) of 28 s ≈ 0.72 s.
+    { "x-ratelimit-limit-tokens": "8000", "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "28s" },
+  ]
+  const slept: number[] = []
+  const router = new LlmRouter([groq], {
+    sink: memorySink(), now: () => NOW, sleep: async (ms) => { slept.push(ms) },
+    fetcher: async () => {
+      const h = headers.shift() ?? {}
+      return { ok: true, status: 200, headers: { get: (n: string) => h[n] ?? null }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"ok":1}' } }] }) }
+    },
+  })
+  await router.call(req) // leaves 120 tokens: too few for the next request
+  await router.call(req) // so this one waits for the 1.5 s refill first
+  assert.deepEqual(slept, [1550])
+  await router.call(req) // plenty left: no wait
+  await router.call(req) // 10 left but the refill is 45 s away: send and let 429 handling decide
+  assert.deepEqual(slept, [1550])
+  await router.call(req) // (the reply carried the 28 s / 8,000-limit headers)
+  await router.call(req)
+  assert.equal(slept.length, 2)
+  assert.ok(slept[1] > 500 && slept[1] < 1500, `waited ${slept[1]} ms`)
 })

@@ -114,14 +114,29 @@ export class AllProvidersUnavailable extends Error {
   }
 }
 
+/** Groq's x-ratelimit-reset-* durations ("7.66s", "2m59.56s", "292.5ms") in ms. */
+export function parseResetMs(v: string | null): number | null {
+  if (!v) return null
+  const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 } as const
+  let ms = 0
+  let matched = false
+  for (const [, n, u] of v.matchAll(/([\d.]+)(ms|h|m|s)/g)) { matched = true; ms += Number(n) * unit[u as keyof typeof unit] }
+  return matched ? Math.ceil(ms) : null
+}
+
+type Budget = { tokens: number | null; tokenLimit: number | null; tokensResetAt: number; requests: number | null; requestsResetAt: number }
+const PACE_MAX_MS = 20_000
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 const newId = () => `llm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 export class LlmRouter {
   private cooldowns = new Map<ProviderName, string>()
+  private budgets = new Map<ProviderName, Budget>()
   private loaded = false
   constructor(
     private readonly providers: ProviderCfg[],
-    private readonly opts: { sink?: AuditSink; fetcher?: Fetcher; now?: () => Date; timeoutMs?: number; ignoreCooldowns?: boolean } = {},
+    private readonly opts: { sink?: AuditSink; fetcher?: Fetcher; now?: () => Date; timeoutMs?: number; ignoreCooldowns?: boolean; sleep?: (ms: number) => Promise<void> } = {},
   ) {}
 
   get configured() { return this.providers.map((p) => `${p.name}/${p.model}`) }
@@ -141,6 +156,42 @@ export class LlmRouter {
   private resting(p: ProviderCfg): string | null {
     const until = this.cooldowns.get(p.name)
     return until && until > this.now().toISOString() ? until : null
+  }
+
+  // Free tiers cap tokens per minute (Groq: 8,000 on gpt-oss-120b) and report what's left in
+  // x-ratelimit-* headers. Wait for the window to refill instead of sending a request that
+  // would get a 429. Longer waits (a daily request cap) are left to the normal 429 handling.
+  private noteBudget(p: ProviderCfg, h: { get(n: string): string | null }) {
+    const num = (n: string) => { const v = h.get(n); return v != null && v !== "" && Number.isFinite(Number(v)) ? Number(v) : null }
+    const tokens = num("x-ratelimit-remaining-tokens")
+    const tokenLimit = num("x-ratelimit-limit-tokens")
+    const requests = num("x-ratelimit-remaining-requests")
+    if (tokens == null && requests == null) return
+    const now = this.now().getTime()
+    this.budgets.set(p.name, {
+      tokens, tokenLimit, tokensResetAt: now + (parseResetMs(h.get("x-ratelimit-reset-tokens")) ?? 0),
+      requests, requestsResetAt: now + (parseResetMs(h.get("x-ratelimit-reset-requests")) ?? 0),
+    })
+  }
+
+  private async pace(p: ProviderCfg, estTokens: number) {
+    const b = this.budgets.get(p.name)
+    if (!b) return
+    const now = this.now().getTime()
+    let until = 0
+    if (b.tokens != null && b.tokens < estTokens && b.tokensResetAt > now) {
+      // reset-tokens is when the whole window is full again; tokens come back steadily, so
+      // wait only for the share this request is missing (what Groq's "try again in" says).
+      const full = b.tokensResetAt - now
+      const share = b.tokenLimit && b.tokenLimit > b.tokens ? Math.min(1, (estTokens - b.tokens) / (b.tokenLimit - b.tokens)) : 1
+      until = now + Math.ceil(full * share)
+    }
+    if (b.requests != null && b.requests < 1 && b.requestsResetAt > now) until = Math.max(until, b.requestsResetAt)
+    const wait = until - now
+    if (wait > 0 && wait <= PACE_MAX_MS) {
+      await (this.opts.sleep ?? sleep)(wait + 50)
+      this.budgets.delete(p.name)
+    }
   }
 
   private async audit(row: Omit<AuditRow, "id" | "at">) {
@@ -176,6 +227,8 @@ export class LlmRouter {
           message = { content: JSON.stringify(r.value) }
           usage = { input: r.promptTokens, output: r.evalTokens }
         } else {
+          // Rough token estimate (4 chars a token) plus room for the reply.
+          await this.pace(p, Math.ceil(JSON.stringify(req.messages).length / 4) + 200)
           const r = await this.openAi(p, req)
           if (!r.ok) {
             const f = classifyFailure(r.status, r.body, r.retryAfter, this.now())
@@ -230,6 +283,7 @@ export class LlmRouter {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(this.opts.timeoutMs ?? 60_000),
     })
+    this.noteBudget(p, res.headers)
     const text = await res.text()
     if (!res.ok) return { ok: false as const, status: res.status, body: text, retryAfter: res.headers.get("retry-after") }
     const j = JSON.parse(text)

@@ -4,6 +4,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Pace Groq from its rate-limit headers](2026-10-29-groq-rate-limit-pacing.md): waits for tokens to refill instead of getting 429s (78 → 0) |
 | 2026-10-29 | [First run on Groq and Gemini](2026-10-29-first-free-llm-run.md): current models, 400s don't bench, waits out per-minute limits, 3 qualified (all A) |
 | 2026-10-29 | [Free LLMs with automatic failover](2026-10-29-free-llm-router.md): Groq → Gemini → Ollama, switches when a quota runs out, AI usage audit page |
 | 2026-10-29 | [Entity check](2026-10-29-entity-check.md): a model points at the creator's own words, code verifies the quote |

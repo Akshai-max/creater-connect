@@ -426,7 +426,7 @@ When a provider fails, the router writes the reason and a rest period to `llm_ca
 
 Rests from limits and outages carry over between runs: a used-up daily quota stays skipped until it resets. Rests from a bad key or model don't, because the fix is changing `.env.local`. A successful call clears a provider's rest.
 
-Both default models reason before answering, so the router sends `reasoning_effort: low` (`LLM_REASONING_EFFORT` = `low`, `medium`, `high` or `off`). The free tiers allow only a few calls a minute; `npm run classify-entities` waits out rests of 10 minutes or less instead of stopping.
+Both default models reason before answering, so the router sends `reasoning_effort: low` (`LLM_REASONING_EFFORT` = `low`, `medium`, `high` or `off`). The free tiers allow only a few calls a minute. The router reads Groq's `x-ratelimit-*` headers and waits for tokens to refill before sending (up to 20 s), and `npm run classify-entities` waits out rests of 10 minutes or less instead of stopping.
 
 **Audit:** the **AI usage** page (`/ai-usage`) shows each provider's state (available, resting until…, not configured), its last-24-hour calls, failures, tokens and average latency, every automatic switch ("answered by gemini after groq (quota_exhausted…)") and the latest 100 calls. `AGENT_PROVIDER=free` runs the AI agent on the same router, hosted providers only, and a run can switch provider between turns.
 
