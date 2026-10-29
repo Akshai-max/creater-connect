@@ -4,6 +4,9 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [First run on Groq and Gemini](2026-10-29-first-free-llm-run.md): current models, 400s don't bench, waits out per-minute limits, 3 qualified (all A) |
+| 2026-10-29 | [Free LLMs with automatic failover](2026-10-29-free-llm-router.md): Groq → Gemini → Ollama, switches when a quota runs out, AI usage audit page |
+| 2026-10-29 | [Entity check](2026-10-29-entity-check.md): a model points at the creator's own words, code verifies the quote |
 | 2026-10-29 | [Stop logging Server Function arguments](2026-10-29-hide-server-function-args.md): the dev log printed login passwords |
 | 2026-10-29 | [Leads page pagination](2026-10-29-leads-pagination.md): counts and paging in the database, 50 per page, 4.3 MB → 35 KB per load |
 | 2026-10-29 | [Observed need signals](2026-10-29-observed-need-signals.md): captions, repurposing and consistency read from channel data, labelled "observed" |

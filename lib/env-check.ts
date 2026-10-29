@@ -31,7 +31,11 @@ export function checkEnv(env: Env): EnvFinding[] {
   else if (!has(env, "SEED_TEST_ALLOWLIST")) warn("SEED_TEST_ALLOWLIST", "empty: test mode can't send anything until your own test accounts are listed")
   if (has(env, "RESEND_API_KEY") !== has(env, "OUTREACH_FROM_EMAIL")) warn("OUTREACH_FROM_EMAIL", "set both RESEND_API_KEY and OUTREACH_FROM_EMAIL to send email")
 
-  if ((env.AGENT_PROVIDER ?? "anthropic") === "anthropic" && !has(env, "ANTHROPIC_API_KEY")) warn("ANTHROPIC_API_KEY", "the AI agent can't run (or set AGENT_PROVIDER=ollama)")
+  if ((env.AGENT_PROVIDER ?? "anthropic") === "anthropic" && !has(env, "ANTHROPIC_API_KEY")) warn("ANTHROPIC_API_KEY", "the AI agent can't run (or set AGENT_PROVIDER=free for Groq/Gemini)")
+  const freeKeys = has(env, "GROQ_API_KEY") || has(env, "GEMINI_API_KEY")
+  if (env.AGENT_PROVIDER === "free" && !freeKeys) warn("GROQ_API_KEY", "AGENT_PROVIDER=free needs GROQ_API_KEY and/or GEMINI_API_KEY")
+  if (!freeKeys) warn("GEMINI_API_KEY", "no hosted LLM for the entity check: set GROQ_API_KEY and/or GEMINI_API_KEY (Ollama alone is slow and can't run on a host)")
+  else if (!(has(env, "GROQ_API_KEY") && has(env, "GEMINI_API_KEY"))) warn(has(env, "GROQ_API_KEY") ? "GEMINI_API_KEY" : "GROQ_API_KEY", "only one free provider: nothing to switch to when its quota runs out")
   if (env.AGENT_PROVIDER === "ollama" && /localhost/.test(env.OLLAMA_URL ?? "http://localhost")) warn("OLLAMA_URL", "points at localhost: a hosted deployment can't reach your machine's Ollama")
   if (env.APIFY_DISCOVERY === "enabled") warn("APIFY_DISCOVERY", "enabled: the daily cron scrapes Instagram, which its terms don't allow")
   return out

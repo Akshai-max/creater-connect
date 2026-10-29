@@ -327,6 +327,8 @@ export function toResearchRow(ch: DiscoveredChannel, opts: { now: Date; segmentH
     country_evidence_url: ch.country ? `${ch.channelUrl}/about` : "",
     primary_language: lang ?? "",
     primary_platform: "youtube",
+    // The creator's own channel text, kept so later checks (entity) can run without refetching.
+    channel_description: ch.description.slice(0, 1500),
     profile_url: ch.channelUrl,
     stable_creator_id: ch.channelId,
     followers_or_subscribers: ch.subscribers ?? "",

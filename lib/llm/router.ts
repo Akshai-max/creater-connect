@@ -1,0 +1,250 @@
+// LLM router: free hosted models first, with automatic failover and an audit trail.
+//   LLM_PROVIDERS=groq,gemini,ollama   order to try (default; unconfigured ones are skipped)
+//   GROQ_API_KEY / GROQ_MODEL          console.groq.com
+//   GEMINI_API_KEY / GEMINI_MODEL      aistudio.google.com
+//   LLM_REASONING_EFFORT               low (default) | medium | high | off. The default models
+//                                      think before answering; low keeps that from using up max_tokens.
+// Groq and Gemini both speak the OpenAI chat-completions format. When one answers 429
+// (rate limit or daily quota), 401/403 (key), 404 (model) or 5xx, the router writes an
+// llm_calls row with a cooldown and moves to the next provider. Cooldowns are read back
+// from llm_calls, so a quota that ran out stays skipped across runs until it resets.
+import { and, desc, eq, gt, isNotNull, notInArray, or, isNull } from "drizzle-orm"
+import { ollamaStructured } from "../agent/ollama"
+
+export type ProviderName = "groq" | "gemini" | "ollama"
+export type ProviderCfg = { name: ProviderName; model: string; kind: "openai" | "ollama"; baseUrl: string; apiKey?: string; reasoningEffort?: string }
+type Env = Record<string, string | undefined>
+
+export const PROVIDER_DEFAULTS: Record<ProviderName, { baseUrl: string; model: string }> = {
+  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b" },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.5-flash" },
+  ollama: { baseUrl: "http://localhost:11434", model: "qwen3:4b" },
+}
+
+export function providersFromEnv(env: Env = process.env): ProviderCfg[] {
+  const order = (env.LLM_PROVIDERS || "groq,gemini,ollama").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+  const out: ProviderCfg[] = []
+  const effort = (env.LLM_REASONING_EFFORT?.trim() || "low").toLowerCase()
+  const reasoningEffort = effort === "off" ? undefined : effort
+  for (const name of order) {
+    if (name === "groq" && env.GROQ_API_KEY?.trim()) out.push({ name, kind: "openai", baseUrl: PROVIDER_DEFAULTS.groq.baseUrl, model: env.GROQ_MODEL?.trim() || PROVIDER_DEFAULTS.groq.model, apiKey: env.GROQ_API_KEY.trim(), reasoningEffort })
+    if (name === "gemini" && env.GEMINI_API_KEY?.trim()) out.push({ name, kind: "openai", baseUrl: PROVIDER_DEFAULTS.gemini.baseUrl, model: env.GEMINI_MODEL?.trim() || PROVIDER_DEFAULTS.gemini.model, apiKey: env.GEMINI_API_KEY.trim(), reasoningEffort })
+    if (name === "ollama") out.push({ name, kind: "ollama", baseUrl: (env.OLLAMA_URL || PROVIDER_DEFAULTS.ollama.baseUrl).replace(/\/+$/, ""), model: env.OLLAMA_MODEL?.trim() || PROVIDER_DEFAULTS.ollama.model })
+  }
+  return out
+}
+
+// ── Failure classification ──────────────────────────────────────────────────
+export type CallStatus = "ok" | "rate_limited" | "quota_exhausted" | "error" | "invalid_output"
+export type Failure = { status: Exclude<CallStatus, "ok">; cooldownMs: number; message: string }
+
+/** Milliseconds until the next midnight in US Pacific time (when Gemini's daily quota resets). */
+export function msUntilPacificMidnight(now: Date): number {
+  const pt = new Date(now.toLocaleString("en-US", { timeZone: "America/Los_Angeles" }))
+  const next = new Date(pt)
+  next.setHours(24, 0, 0, 0)
+  return Math.max(60_000, next.getTime() - pt.getTime())
+}
+
+export function classifyFailure(httpStatus: number | null, body: string, retryAfter: string | null, now: Date): Failure {
+  const msg = body.replace(/\s+/g, " ").slice(0, 300)
+  const retryMs = retryAfter && /^\d+(\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000) : null
+  if (httpStatus === 429) {
+    const daily = /per ?day|daily|PerDay|RESOURCE_EXHAUSTED.*day|tokens per day|requests per day|\bRPD\b|\bTPD\b/i.test(body)
+    if (daily) return { status: "quota_exhausted", cooldownMs: retryMs && retryMs > 60_000 ? retryMs : msUntilPacificMidnight(now), message: `daily quota used up: ${msg}` }
+    return { status: "rate_limited", cooldownMs: retryMs ?? 60_000, message: `rate limited: ${msg}` }
+  }
+  if (httpStatus === 401 || httpStatus === 403) return { status: "error", cooldownMs: 60 * 60_000, message: `key rejected (HTTP ${httpStatus}) - check the API key: ${msg}` }
+  if (httpStatus === 404) return { status: "error", cooldownMs: 60 * 60_000, message: `model not found (HTTP 404) - set the *_MODEL variable to a current model: ${msg}` }
+  // 400 is about this request (e.g. Groq's json_validate_failed), not the provider: try the next one, no rest.
+  if (httpStatus === 400) return { status: "invalid_output", cooldownMs: 0, message: `request rejected (HTTP 400): ${msg}` }
+  if (httpStatus && httpStatus >= 500) return { status: "error", cooldownMs: 30_000, message: `provider error HTTP ${httpStatus}: ${msg}` }
+  if (httpStatus) return { status: "error", cooldownMs: 5 * 60_000, message: `HTTP ${httpStatus}: ${msg}` }
+  return { status: "error", cooldownMs: 30_000, message: `request failed: ${msg}` }
+}
+
+// ── Audit ───────────────────────────────────────────────────────────────────
+export type AuditRow = {
+  id: string; at: string; purpose: string; subjectRef: string | null; provider: ProviderName; model: string; status: CallStatus
+  httpStatus: number | null; latencyMs: number | null; inputTokens: number | null; outputTokens: number | null
+  error: string | null; cooldownUntil: string | null; fallbackFrom: string | null
+}
+export type AuditSink = { write(row: AuditRow): Promise<void>; activeCooldowns(now: Date): Promise<Map<ProviderName, string>> }
+
+export const dbAuditSink: AuditSink = {
+  async write(row) {
+    const { db } = await import("../db")
+    const { llmCalls } = await import("../db/schema")
+    await db.insert(llmCalls).values(row)
+  },
+  async activeCooldowns(now) {
+    const { db } = await import("../db")
+    const { llmCalls } = await import("../db/schema")
+    // Only limits and outages carry over between runs. A bad key (401/403) or model (404)
+    // is fixed by changing .env.local, so it mustn't keep the provider benched afterwards.
+    const rows = await db.select({ provider: llmCalls.provider, until: llmCalls.cooldownUntil }).from(llmCalls)
+      .where(and(
+        isNotNull(llmCalls.cooldownUntil), gt(llmCalls.cooldownUntil, now.toISOString()),
+        or(isNull(llmCalls.httpStatus), notInArray(llmCalls.httpStatus, [401, 403, 404])),
+      )).orderBy(desc(llmCalls.at)).limit(50)
+    const m = new Map<ProviderName, string>()
+    for (const r of rows) if (r.until && !m.has(r.provider as ProviderName)) m.set(r.provider as ProviderName, r.until)
+    // A later successful call clears a cooldown (e.g. a per-minute limit that already passed).
+    for (const p of [...m.keys()]) {
+      const ok = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(eq(llmCalls.provider, p), eq(llmCalls.status, "ok"))).orderBy(desc(llmCalls.at)).limit(1)
+      const lastFail = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(eq(llmCalls.provider, p), isNotNull(llmCalls.cooldownUntil))).orderBy(desc(llmCalls.at)).limit(1)
+      if (ok[0] && lastFail[0] && ok[0].at > lastFail[0].at) m.delete(p)
+    }
+    return m
+  },
+}
+
+// ── Calls ───────────────────────────────────────────────────────────────────
+type Fetcher = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) =>
+  Promise<{ ok: boolean; status: number; headers: { get(n: string): string | null }; text(): Promise<string> }>
+
+export type ChatMessage = { role: "system" | "user" | "assistant" | "tool"; content: string | null; tool_calls?: OpenAiToolCall[]; tool_call_id?: string; name?: string }
+export type OpenAiToolCall = { id: string; type: "function"; function: { name: string; arguments: string } }
+export type OpenAiTool = { type: "function"; function: { name: string; description: string; parameters: unknown } }
+
+export class AllProvidersUnavailable extends Error {
+  constructor(message: string, public readonly nextAvailableAt: string | null) {
+    super(message)
+    this.name = "AllProvidersUnavailable"
+  }
+}
+
+const newId = () => `llm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+
+export class LlmRouter {
+  private cooldowns = new Map<ProviderName, string>()
+  private loaded = false
+  constructor(
+    private readonly providers: ProviderCfg[],
+    private readonly opts: { sink?: AuditSink; fetcher?: Fetcher; now?: () => Date; timeoutMs?: number; ignoreCooldowns?: boolean } = {},
+  ) {}
+
+  get configured() { return this.providers.map((p) => `${p.name}/${p.model}`) }
+
+  private now() { return this.opts.now?.() ?? new Date() }
+  private sink() { return this.opts.sink ?? dbAuditSink }
+
+  private async loadCooldowns() {
+    if (this.loaded) return
+    this.loaded = true
+    if (this.opts.ignoreCooldowns) return
+    try {
+      for (const [p, until] of await this.sink().activeCooldowns(this.now())) this.cooldowns.set(p, until)
+    } catch { /* audit table unreachable: start fresh rather than fail */ }
+  }
+
+  private resting(p: ProviderCfg): string | null {
+    const until = this.cooldowns.get(p.name)
+    return until && until > this.now().toISOString() ? until : null
+  }
+
+  private async audit(row: Omit<AuditRow, "id" | "at">) {
+    try { await this.sink().write({ id: newId(), at: this.now().toISOString(), ...row }) } catch { /* never fail a call because the audit write failed */ }
+  }
+
+  /**
+   * One chat call with failover. `parse` turns the reply into the value the caller wants
+   * and throws if it's unusable (then the next provider is tried and the reply is audited
+   * as invalid_output). Providers that can't do tools are skipped when tools are passed.
+   */
+  async call<T>(req: {
+    purpose: string; subjectRef?: string | null; messages: ChatMessage[]; tools?: OpenAiTool[]
+    json?: boolean; schema?: object; maxTokens?: number; parse: (msg: { content: string | null; tool_calls?: OpenAiToolCall[] }) => T
+  }): Promise<{ value: T; provider: ProviderName; model: string; message: { content: string | null; tool_calls?: OpenAiToolCall[] } }> {
+    await this.loadCooldowns()
+    const skipped: string[] = []
+    for (const p of this.providers) {
+      if (req.tools && p.kind !== "openai") continue
+      const until = this.resting(p)
+      if (until) { skipped.push(`${p.name} (resting until ${until})`); continue }
+      const started = Date.now()
+      const base = { purpose: req.purpose, subjectRef: req.subjectRef ?? null, provider: p.name, model: p.model, fallbackFrom: skipped.length ? skipped.join("; ") : null }
+      let message: { content: string | null; tool_calls?: OpenAiToolCall[] }
+      let usage = { input: null as number | null, output: null as number | null }
+      try {
+        if (p.kind === "ollama") {
+          if (!req.schema) throw Object.assign(new Error("ollama is used for structured calls only"), { skip: true })
+          const r = await ollamaStructured<unknown>({
+            baseUrl: p.baseUrl, model: p.model, schema: req.schema, maxTokens: req.maxTokens ?? 160, timeoutMs: this.opts.timeoutMs ?? 180_000,
+            system: req.messages.find((m) => m.role === "system")?.content ?? "", user: req.messages.filter((m) => m.role === "user").map((m) => m.content).join("\n"),
+          })
+          message = { content: JSON.stringify(r.value) }
+          usage = { input: r.promptTokens, output: r.evalTokens }
+        } else {
+          const r = await this.openAi(p, req)
+          if (!r.ok) {
+            const f = classifyFailure(r.status, r.body, r.retryAfter, this.now())
+            const until = f.cooldownMs > 0 ? new Date(this.now().getTime() + f.cooldownMs).toISOString() : null
+            if (until) this.cooldowns.set(p.name, until)
+            await this.audit({ ...base, status: f.status, httpStatus: r.status, latencyMs: Date.now() - started, inputTokens: null, outputTokens: null, error: f.message, cooldownUntil: until })
+            skipped.push(`${p.name} (${f.status}: ${f.message.slice(0, 90)})`)
+            continue
+          }
+          message = r.message
+          usage = r.usage
+        }
+      } catch (e) {
+        if ((e as { skip?: boolean }).skip) continue
+        const f = classifyFailure(null, (e as Error).message, null, this.now())
+        const until = new Date(this.now().getTime() + f.cooldownMs).toISOString()
+        this.cooldowns.set(p.name, until)
+        await this.audit({ ...base, status: "error", httpStatus: null, latencyMs: Date.now() - started, inputTokens: null, outputTokens: null, error: f.message, cooldownUntil: until })
+        skipped.push(`${p.name} (error: ${f.message.slice(0, 90)})`)
+        continue
+      }
+      let value: T
+      try {
+        value = req.parse(message)
+      } catch (e) {
+        await this.audit({ ...base, status: "invalid_output", httpStatus: 200, latencyMs: Date.now() - started, inputTokens: usage.input, outputTokens: usage.output, error: (e as Error).message.slice(0, 300), cooldownUntil: null })
+        skipped.push(`${p.name} (invalid output)`)
+        continue
+      }
+      this.cooldowns.delete(p.name)
+      await this.audit({ ...base, status: "ok", httpStatus: 200, latencyMs: Date.now() - started, inputTokens: usage.input, outputTokens: usage.output, error: null, cooldownUntil: null })
+      return { value, provider: p.name, model: p.model, message }
+    }
+    const next = [...this.cooldowns.values()].sort()[0] ?? null
+    throw new AllProvidersUnavailable(
+      this.providers.length
+        ? `no LLM provider available: ${skipped.join("; ") || "none can handle this request"}`
+        : "no LLM provider configured - set GROQ_API_KEY and/or GEMINI_API_KEY (or LLM_PROVIDERS=ollama)",
+      next,
+    )
+  }
+
+  private async openAi(p: ProviderCfg, req: { messages: ChatMessage[]; tools?: OpenAiTool[]; json?: boolean; maxTokens?: number }) {
+    const fetcher: Fetcher = this.opts.fetcher ?? ((u, i) => fetch(u, i) as never)
+    const body: Record<string, unknown> = { model: p.model, messages: req.messages, temperature: 0, max_tokens: req.maxTokens ?? 1024 }
+    if (p.reasoningEffort) body.reasoning_effort = p.reasoningEffort
+    if (req.tools?.length) body.tools = req.tools
+    if (req.json) body.response_format = { type: "json_object" }
+    const res = await fetcher(`${p.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${p.apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 60_000),
+    })
+    const text = await res.text()
+    if (!res.ok) return { ok: false as const, status: res.status, body: text, retryAfter: res.headers.get("retry-after") }
+    const j = JSON.parse(text)
+    const m = j.choices?.[0]?.message ?? {}
+    return {
+      ok: true as const,
+      message: { content: m.content ?? null, tool_calls: m.tool_calls?.length ? m.tool_calls : undefined },
+      usage: { input: j.usage?.prompt_tokens ?? null, output: j.usage?.completion_tokens ?? null },
+    }
+  }
+}
+
+let shared: LlmRouter | null = null
+/** One router per process, so cooldowns learned in one call apply to the next. */
+export function defaultRouter(): LlmRouter {
+  shared ??= new LlmRouter(providersFromEnv())
+  return shared
+}

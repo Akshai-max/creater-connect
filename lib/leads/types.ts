@@ -53,6 +53,11 @@ export type LeadInput = {
   creatorName: string
   segment: string
   entityType: string // "individual" for real creators
+  // Where the entity type comes from: a quote in the creator's own text, located by
+  // code. entitySource says who read it ("person", or "ai:<model>" for the local model).
+  entityEvidenceUrl?: string | null
+  entityQuote?: string | null
+  entitySource?: string | null
   countryIso2: string | null
   countryEvidenceUrl: string | null
   primaryLanguage: string | null

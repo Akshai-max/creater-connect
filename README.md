@@ -138,6 +138,8 @@ These make the AI features actually about *your* brand:
 | `npm run discover` | Trigger the Apify discovery route on the local dev server (needs `curl` + `jq`). Off unless `APIFY_DISCOVERY=enabled` |
 | `npm run purge-demo [-- --yes]` | Remove sample creators, demo candidates and fixture leads, with a backup in `data/backups/` (dry run without `--yes`) |
 | `npm run check-env` | Check `.env.local` as if it were production: lists missing or risky settings by name, never values |
+| `npm run classify-entities -- --in <csv>` | Entity check (Groq → Gemini → Ollama): sets `entity_type` only from an exact, located quote in the creator's own text (see [Entity check](#entity-check)) |
+| `npm run llm-check` | Test each configured LLM provider with one tiny call: shows a bad key, wrong model, rate limit or used-up quota |
 | `/agent` page or `POST /api/agent/run` | Run the AI agent: proposes picks, drafts and next steps for review (see [AI agent](#ai-agent)) |
 | `npm run engine -- --input <file>` | Run the lead engine end to end (see [Lead engine](#lead-engine)) |
 | `npm run seed-test -- start` | Start a seed test against your own allowlisted accounts |
@@ -384,6 +386,50 @@ npm run discover-youtube -- --query "podcast;business coach;productivity" --regi
 
 **LinkedIn** has no permitted API for this, and scraping is against its terms. A LinkedIn link is recorded with the video or page it was published on, but its activity and business use stay empty with a `CONFIRM` note until a person checks the profile. Until then, LinkedIn isn't chosen as a reachable channel.
 
+#### Entity check
+
+Every discovered row starts as `entity_type=needs_review`. `npm run classify-entities` asks a model one short question per row, with JSON-only output. The model comes from the [LLM router](#free-llms-and-automatic-failover): Groq first, then Gemini, then local Ollama (about 15 s a row on a laptop CPU). The model must answer with an **exact quote** from the creator's own text (channel name, description, video titles), and code then checks it:
+
+1. The quote must appear word for word in that text, ignoring case, spacing and curly quotes. Otherwise it's rejected.
+2. The quote must say *who runs the channel*: "I'm…", "hosted by…" or "join me" for a person, and "agency", "network" or "official channel" for an organisation. A real but irrelevant quote, such as a video title or slogan, is rejected.
+3. "Unsure", or either check failing, leaves the row as `needs_review` with an `entity_note`.
+
+A confirmed row gets `entity_evidence_url`, `entity_quote` and `entity_source=ai:<model>`, stored as an `entity` evidence item. The evidence is the creator's own words; the model only points at them. Rows a person already set are never changed, and only rows where the entity type decides the outcome are checked (the rest are rejected for other reasons). Answers are cached in `data/entity-cache.json`, so an interrupted run resumes.
+
+```bash
+npm run llm-check                                    # are the keys working?
+npm run classify-entities -- --in data/discovered.csv
+npm run engine -- --input data/discovered.csv
+```
+
+#### Free LLMs and automatic failover
+
+`lib/llm/router.ts` sends each model call to the first available provider in `LLM_PROVIDERS` (default `groq,gemini,ollama`; unconfigured ones are skipped):
+
+| Provider | Key | Default model |
+|---|---|---|
+| Groq | `GROQ_API_KEY` ([console.groq.com/keys](https://console.groq.com/keys)) | `openai/gpt-oss-120b` (`GROQ_MODEL`) |
+| Google Gemini | `GEMINI_API_KEY` ([aistudio.google.com/apikey](https://aistudio.google.com/apikey)) | `gemini-3.5-flash` (`GEMINI_MODEL`) |
+| Ollama (local) | none | `OLLAMA_MODEL` |
+
+When a provider fails, the router writes the reason and a rest period to `llm_calls`, then moves to the next one:
+
+| Response | Status | Rests for |
+|---|---|---|
+| 429 that says per day, daily, PerDay, TPD or RPD | `quota_exhausted` | until midnight US Pacific (or the provider's `retry-after`) |
+| other 429 | `rate_limited` | `retry-after`, else 60 s |
+| 401 / 403 | `error` (key rejected) | 1 h, this run only |
+| 400 (e.g. Groq `json_validate_failed`) | `invalid_output` | none, the next provider is tried |
+| 404 | `error` (model not found) | 1 h, this run only |
+| 5xx or network | `error` | 30 s |
+| reply the caller can't use | `invalid_output` | none, the next provider is tried |
+
+Rests from limits and outages carry over between runs: a used-up daily quota stays skipped until it resets. Rests from a bad key or model don't, because the fix is changing `.env.local`. A successful call clears a provider's rest.
+
+Both default models reason before answering, so the router sends `reasoning_effort: low` (`LLM_REASONING_EFFORT` = `low`, `medium`, `high` or `off`). The free tiers allow only a few calls a minute; `npm run classify-entities` waits out rests of 10 minutes or less instead of stopping.
+
+**Audit:** the **AI usage** page (`/ai-usage`) shows each provider's state (available, resting until…, not configured), its last-24-hour calls, failures, tokens and average latency, every automatic switch ("answered by gemini after groq (quota_exhausted…)") and the latest 100 calls. `AGENT_PROVIDER=free` runs the AI agent on the same router, hosted providers only, and a run can switch provider between turns.
+
 Rows always start with `entity_type=needs_review` and a `review_notes` column listing what a person must confirm or find. **A discovered row is never qualified without that review.** When video length is unknown (RSS has no durations), the activity check is *unverified*, not rejected.
 
 A pilot on 16 real channels is written up in [`docs/PILOT_RESULTS.md`](docs/PILOT_RESULTS.md). It found 0 qualified, 12 unverified and 4 inactive, and the missing need evidence is the main gap. The guides for the remaining deliverables are [`docs/SEED_TEST_RUNBOOK.md`](docs/SEED_TEST_RUNBOOK.md), [`docs/VIDEO_SCRIPTS.md`](docs/VIDEO_SCRIPTS.md) and [`docs/PRODUCT_INSIGHT_TEMPLATE.md`](docs/PRODUCT_INSIGHT_TEMPLATE.md).
@@ -408,7 +454,7 @@ LinkedIn and Instagram have no permitted API for sending these messages, so thos
 npm test
 ```
 
-There are 63 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, published Instagram/LinkedIn links, the Instagram Business Discovery lookup, language detection, observed need signals, the hashed login session, the production env check, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
+There are 77 tests in `tests/` and they don't need a database. They cover qualification rules and rejection reasons, activity window boundaries, missing or malformed evidence, duplicate detection, idempotent refresh, CSV column order, escaping and UTF-8, the workbook's dropdown values and completeness formula, export and report reconciliation, country distribution, Priority A selection, message generation and channel limits, segment templates, discovery parsing and signal extraction, published Instagram/LinkedIn links, the Instagram Business Discovery lookup, language detection, observed need signals, the entity check (quote location and wording), the LLM router (failover, quota rests, audit) and the agent loop on free models, the hashed login session, the production env check, unknown video lengths, the unavailable-channel fallback, webhook auth, test-mode allowlisting, seed-test event logic, failed provider calls, log redaction, outreach-to-pipeline stage sync, and the AI agent guardrails and n8n workflow.
 
 ### Scale benchmark
 

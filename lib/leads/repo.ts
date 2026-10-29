@@ -83,6 +83,7 @@ function evidenceRows(p: ProcessedLead, nowIso: string) {
     rows.push({ id: `${p.id}-ev${++n}`, leadId: p.id, checkedAt: i.checkedDate ?? nowIso, ...r })
   add({ kind: "profile", url: i.profileUrl, value: i.stableCreatorId, label: `${i.primaryPlatform} profile` })
   if (i.countryEvidenceUrl) add({ kind: "country", url: i.countryEvidenceUrl, value: i.countryIso2 })
+  if (i.entityEvidenceUrl) add({ kind: "entity", url: i.entityEvidenceUrl, value: i.entityType, label: i.entityQuote ?? null, source: i.entitySource ?? null })
   for (const c of i.contentItems) add({ kind: "content", url: c.url, label: c.title, publishedAt: c.publishedAt, isLongform: c.isLongform })
   if (i.monetizationEvidenceUrl || i.monetizationSignal) add({ kind: "monetization", url: i.monetizationEvidenceUrl, value: i.monetizationSignal })
   if (i.needEvidenceUrl || i.need) add({ kind: "need", url: i.needEvidenceUrl, value: i.need, label: i.needSignalText, source: i.needSource ?? null })

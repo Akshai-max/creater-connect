@@ -202,7 +202,7 @@ export const leads = pgTable("leads", {
 export const leadEvidence = pgTable("lead_evidence", {
   id: text("id").primaryKey(),
   leadId: text("lead_id").notNull().references(() => leads.id, { onDelete: "cascade" }),
-  kind: text("kind").notNull(), // content | monetization | need | contact | country | profile
+  kind: text("kind").notNull(), // content | monetization | need | contact | country | profile | entity
   url: text("url"),
   label: text("label"),
   publishedAt: text("published_at"),
@@ -329,6 +329,32 @@ export const agentProposals = pgTable("agent_proposals", {
 
 export type AgentRun = typeof agentRuns.$inferSelect
 export type AgentProposal = typeof agentProposals.$inferSelect
+
+// Audit of every LLM call (Groq, Gemini, Ollama): which provider answered, how long it
+// took, tokens, and why a provider was skipped (rate limit, quota, error). A row with
+// cooldown_until marks that provider as resting until then; the router reads the latest
+// one per provider to decide where the next call goes.
+export const llmCalls = pgTable("llm_calls", {
+  id: text("id").primaryKey(),
+  at: text("at").notNull(),
+  purpose: text("purpose").notNull(), // entity_check | agent | llm_check
+  subjectRef: text("subject_ref"), // e.g. the channel id being checked
+  provider: text("provider").notNull(), // groq | gemini | ollama
+  model: text("model").notNull(),
+  status: text("status").notNull(), // ok | rate_limited | quota_exhausted | error | invalid_output
+  httpStatus: integer("http_status"),
+  latencyMs: integer("latency_ms"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  error: text("error"),
+  cooldownUntil: text("cooldown_until"),
+  fallbackFrom: text("fallback_from"), // provider(s) skipped or failed before this one
+}, (t) => [
+  index("llm_calls_at_idx").on(t.at),
+  index("llm_calls_provider_idx").on(t.provider, t.at),
+])
+
+export type LlmCall = typeof llmCalls.$inferSelect
 
 export type Lead = typeof leads.$inferSelect
 export type LeadEvidenceRow = typeof leadEvidence.$inferSelect

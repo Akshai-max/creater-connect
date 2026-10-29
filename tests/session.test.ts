@@ -34,6 +34,7 @@ test("check-env flags blocking and risky production settings by name", async () 
     DATABASE_URL: "postgres://x", APP_PASSWORD: "a-long-password-123", SENDER_NAME: "A", SENDER_ROLE: "B", SENDER_COMPANY: "C", SENDER_POSTAL_ADDRESS: "D",
     CRON_SECRET: "x".repeat(32), ENGINE_WEBHOOK_SECRET: "y".repeat(32), AGENT_WEBHOOK_SECRET: "z".repeat(32), YOUTUBE_API_KEY: "k",
     APP_BASE_URL: "https://crm.example.com", SEED_TEST_ALLOWLIST: "email:me@example.com", AGENT_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "k",
+    GROQ_API_KEY: "g", GEMINI_API_KEY: "m",
   }
   assert.deepEqual(checkEnv(good), [])
   assert.ok(keys({ ...good, OUTREACH_MODE: "live" }).includes("warn:OUTREACH_MODE"))

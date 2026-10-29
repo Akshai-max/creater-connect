@@ -89,7 +89,7 @@ const STEP_TIMEOUT_MIN = 15
 
 // node:http rather than fetch: fetch gives up after 300 s without response headers,
 // and Ollama sends none until it has read the whole prompt, which on a CPU can take longer.
-function post(url: string, payload: string, onLine: (line: string) => void): Promise<void> {
+function post(url: string, payload: string, onLine: (line: string) => void, timeoutMs = STEP_TIMEOUT_MIN * 60_000): Promise<void> {
   const u = new URL(url)
   const lib = u.protocol === "https:" ? https : http
   return new Promise((resolve, reject) => {
@@ -117,8 +117,8 @@ function post(url: string, payload: string, onLine: (line: string) => void): Pro
       res.on("error", reject)
     })
     const timer = setTimeout(() => req.destroy(new Error(
-      `Ollama took over ${STEP_TIMEOUT_MIN} minutes for one step - the model is too slow on this machine right now. Close CPU-heavy apps (games, builds), use a smaller OLLAMA_MODEL, or a GPU.`,
-    )), STEP_TIMEOUT_MIN * 60_000)
+      `Ollama took over ${Math.round(timeoutMs / 1000)} s for one step - the model is too slow on this machine right now. Close CPU-heavy apps (games, builds), use a smaller OLLAMA_MODEL, or a GPU.`,
+    )), timeoutMs)
     req.on("close", () => clearTimeout(timer))
     req.on("error", (e: NodeJS.ErrnoException) => reject(
       e.code === "ECONNREFUSED" || e.code === "ENOTFOUND" || e.code === "EHOSTUNREACH"
@@ -143,6 +143,40 @@ async function chat(baseUrl: string, body: object): Promise<{ message: { content
     if (chunk.done) { promptTokens = chunk.prompt_eval_count ?? 0; evalTokens = chunk.eval_count ?? 0 }
   })
   return { message: { content, tool_calls: toolCalls.length ? toolCalls : undefined }, promptTokens, evalTokens }
+}
+
+/**
+ * One short, structured call: the reply must match `schema` (Ollama structured outputs).
+ * Small context and output caps keep it fast on a CPU; the system prompt stays cached
+ * between calls while the model is loaded.
+ */
+export async function ollamaStructured<T>(opts: {
+  baseUrl: string; model: string; system: string; user: string; schema: object
+  timeoutMs?: number; numCtx?: number; maxTokens?: number
+}): Promise<{ value: T; promptTokens: number; evalTokens: number; ms: number }> {
+  const started = Date.now()
+  let content = ""
+  let promptTokens = 0
+  let evalTokens = 0
+  const body = {
+    model: opts.model, stream: true, think: false, keep_alive: "30m", format: opts.schema,
+    options: { temperature: 0, num_ctx: opts.numCtx ?? 2048, num_predict: opts.maxTokens ?? 160 },
+    messages: [{ role: "system", content: opts.system }, { role: "user", content: opts.user }],
+  }
+  await post(`${opts.baseUrl}/api/chat`, JSON.stringify(body), (line) => {
+    if (!line.trim()) return
+    const chunk = JSON.parse(line)
+    if (chunk.error) throw new Error(`Ollama error: ${chunk.error}`)
+    if (chunk.message?.content) content += chunk.message.content
+    if (chunk.done) { promptTokens = chunk.prompt_eval_count ?? 0; evalTokens = chunk.eval_count ?? 0 }
+  }, opts.timeoutMs ?? 180_000)
+  let value: T
+  try {
+    value = JSON.parse(content) as T
+  } catch {
+    throw new Error(`Ollama reply was not valid JSON: ${content.slice(0, 120)}`)
+  }
+  return { value, promptTokens, evalTokens, ms: Date.now() - started }
 }
 
 export async function runOllamaLoop(opts: { baseUrl: string; model: string; system: string; task: string; tools: LoopTool[]; maxIterations: number }): Promise<LoopResult> {

@@ -12,6 +12,8 @@ import { STAGES } from "../stages"
 import { AGENT_LIMITS, AGENT_SOURCES, PITCH_CHANNELS, NEXT_STEP_ACTIONS, agentModel, agentProvider, costUsd, ollamaUrl, type AgentSource, type PitchChannel } from "./config"
 import { validatePitch, validateRationale } from "./guardrails"
 import { runOllamaLoop } from "./ollama"
+import { runRouterLoop } from "../llm/agent-loop"
+import { LlmRouter, providersFromEnv } from "../llm/router"
 import { AGENT_SYSTEM_PROMPT, buildTask } from "./prompt"
 
 const newId = (p: string) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
@@ -371,7 +373,19 @@ export async function runAgent(opts: RunOptions = {}): Promise<RunResult> {
   const tools = buildTools({ id: runId, sources, includeFixtures: !!opts.includeFixtures, maxProposals, made })
   const task = buildTask(sources, maxProposals, opts.instructions)
 
-  if (provider === "ollama") {
+  if (provider === "free") {
+    try {
+      // Hosted providers only: the local model can't drive the tool loop at a usable speed.
+      const router = new LlmRouter(providersFromEnv().filter((p) => p.kind === "openai"))
+      const r = await runRouterLoop({ router, system: AGENT_SYSTEM_PROMPT, task, tools, maxIterations: AGENT_LIMITS.maxIterations, runId })
+      ;({ iterations, summary } = r)
+      if (r.providers.length > 1) summary = `${summary ?? ""}
+
+(Providers used: ${r.providers.join(", ")})`.trim()
+    } catch (e) {
+      error = (e as Error).message
+    }
+  } else if (provider === "ollama") {
     try {
       const r = await runOllamaLoop({ baseUrl: ollamaUrl(), model, system: AGENT_SYSTEM_PROMPT, task, tools, maxIterations: AGENT_LIMITS.maxIterations })
       ;({ iterations, inputTokens, outputTokens, summary } = r)

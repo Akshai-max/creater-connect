@@ -21,7 +21,8 @@ export default async function AgentPage() {
   const ollamaUp = provider === "ollama" ? await ollamaStatus(ollamaUrl(), agentModel()) : null
   const setup = {
     apiKey: !!process.env.ANTHROPIC_API_KEY,
-    ready: provider === "ollama" ? ollamaUp === "ready" : !!process.env.ANTHROPIC_API_KEY,
+    free: !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY),
+    ready: provider === "ollama" ? ollamaUp === "ready" : provider === "free" ? !!(process.env.GROQ_API_KEY || process.env.GEMINI_API_KEY) : !!process.env.ANTHROPIC_API_KEY,
     sender: !!senderFromEnv(),
     resend: !!process.env.RESEND_API_KEY,
     testMode: (process.env.OUTREACH_MODE ?? "test") !== "live",
@@ -45,14 +46,17 @@ export default async function AgentPage() {
             ready={setup.ready}
             notReadyHint={provider === "ollama"
               ? ollamaUp === "no-model" ? `Model ${agentModel()} isn't pulled yet: run "docker compose up ollama-pull".` : `Ollama isn't reachable at ${ollamaUrl()}: run "docker compose up -d".`
-              : "Set ANTHROPIC_API_KEY in .env.local (or AGENT_PROVIDER=ollama) and restart the dev server to run the agent."}
+              : provider === "free" ? "Set GROQ_API_KEY and/or GEMINI_API_KEY in .env.local and restart the dev server."
+              : "Set ANTHROPIC_API_KEY in .env.local (or AGENT_PROVIDER=free for Groq/Gemini) and restart the dev server to run the agent."}
             slow={provider === "ollama"}
           /></CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>Setup</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {provider === "ollama"
+            {provider === "free"
+              ? <SetupRow ok={setup.ready} label="Groq / Gemini (free)" hint={setup.ready ? `${agentModel()}, switches automatically when a quota runs out (see AI usage)` : "set GROQ_API_KEY and/or GEMINI_API_KEY"} />
+              : provider === "ollama"
               ? <SetupRow ok={setup.ready} label="Ollama (Docker)" hint={ollamaUp === "ready" ? `${agentModel()} loaded, free and local` : ollamaUp === "no-model" ? "running, model not pulled" : "not reachable: docker compose up -d"} />
               : <SetupRow ok={setup.apiKey} label="ANTHROPIC_API_KEY" hint="needed to run the agent" />}
             <SetupRow ok={setup.sender} label="SENDER_* identity" hint="pitches are rejected without it" />
