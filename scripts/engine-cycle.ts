@@ -25,6 +25,7 @@
 // --no-discover / --no-classify / --no-contacts turn each off. A failure in either is logged and the refresh
 // still runs.
 import fs from "node:fs"
+import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { parseArgs } from "node:util"
 import { parse } from "csv-parse/sync"
@@ -80,7 +81,7 @@ function acquireLock(): boolean {
   }
 }
 
-type State = { cursor?: number; lastRun?: string; discovery?: DiscoveryState }
+type State = { cursor?: number; lastRun?: string; discovery?: DiscoveryState; keyId?: string }
 const readState = (): State => { try { return JSON.parse(fs.readFileSync(STATE, "utf8")) } catch { return {} } }
 const writeState = (patch: State) => fs.writeFileSync(STATE, JSON.stringify({ ...readState(), ...patch }))
 
@@ -124,8 +125,24 @@ export type EntityReport =
 const nextDue = (lastAt: string | null | undefined) =>
   lastAt ? new Date(Date.parse(lastAt) + Number(values["discover-every"]) * 60_000).toISOString() : null
 
+// The discovery unit counter belongs to one YouTube key. A new key (a new Google account or project)
+// has its own daily quota, so the counter and the next-search timer restart when the key changes.
+// Only a fingerprint of the key is stored, never the key. The first run just records it.
+function resetCounterIfKeyChanged() {
+  const key = process.env.YOUTUBE_API_KEY
+  if (!key) return
+  const keyId = createHash("sha256").update(key).digest("hex").slice(0, 12)
+  const st = readState()
+  if (st.keyId === keyId) return
+  if (st.keyId && st.discovery) {
+    console.log(`[discover] YouTube key changed: daily unit counter reset (was ${st.discovery.unitsToday ?? 0})`)
+    writeState({ keyId, discovery: { ...st.discovery, unitsToday: 0, lastAt: null } })
+  } else writeState({ keyId })
+}
+
 async function discover(): Promise<DiscoveryReport> {
   if (values["no-discover"]) return { status: "off", added: 0, units: 0, sources: [], reason: "--no-discover" }
+  resetCounterIfKeyChanged()
   const queries = fs.existsSync(values.queries!)
     ? fs.readFileSync(values.queries!, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim()).filter(Boolean)
     : []
