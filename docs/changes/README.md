@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Stop logging Server Function arguments](2026-10-29-hide-server-function-args.md): the dev log printed login passwords |
+| 2026-10-29 | [Leads page pagination](2026-10-29-leads-pagination.md): counts and paging in the database, 50 per page, 4.3 MB → 35 KB per load |
 | 2026-10-29 | [Observed need signals](2026-10-29-observed-need-signals.md): captions, repurposing and consistency read from channel data, labelled "observed" |
 | 2026-10-29 | [First real discovery run](2026-10-29-first-real-discovery-run.md): YouTube key verified, 275 channels, why 0 qualify yet |
 | 2026-10-29 | [Remove demo data](2026-10-29-remove-demo-data.md): `npm run purge-demo`, with a backup |

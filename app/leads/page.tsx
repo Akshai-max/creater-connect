@@ -3,7 +3,7 @@ import { leads } from "@/lib/db/schema"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { eq } from "drizzle-orm"
+import { and, asc, eq, sql, type SQL } from "drizzle-orm"
 import Link from "next/link"
 import { Download, Star } from "lucide-react"
 import { buildExport } from "@/lib/leads/export"
@@ -13,24 +13,49 @@ import { statusVariant } from "@/lib/leads/ui"
 export const dynamic = "force-dynamic"
 
 const TABS = ["qualified", "priority-a", "unverified", "rejected", "all"] as const
+const PAGE_SIZE = 50
 
-
-export default async function LeadsPage({ searchParams }: { searchParams: Promise<{ tab?: string; fixtures?: string }> }) {
+// Everything is filtered, counted, sorted and paged in Postgres, and only the columns
+// the table shows are loaded, so the page stays fast as discovery adds thousands of leads.
+export default async function LeadsPage({ searchParams }: { searchParams: Promise<{ tab?: string; fixtures?: string; page?: string }> }) {
   const params = await searchParams
   const tab = (TABS.includes(params.tab as any) ? params.tab : "qualified") as (typeof TABS)[number]
   const showFixtures = params.fixtures === "1"
-  const all = (await db.select().from(leads)).filter((l) => showFixtures || !l.isFixture)
-  const { report } = buildExport(all)
-  const counts = { qualified: 0, unverified: 0, rejected: 0 } as Record<string, number>
-  for (const l of all) counts[l.candidateStatus] = (counts[l.candidateStatus] ?? 0) + 1
-  const priorityA = all.filter((l) => l.priority === "A").length
-  const fixtureCount = (await db.select({ id: leads.id }).from(leads).where(eq(leads.isFixture, true))).length
+  const visible = showFixtures ? undefined : eq(leads.isFixture, false)
+  const tabFilter: SQL | undefined = tab === "all" ? undefined : tab === "priority-a" ? eq(leads.priority, "A") : eq(leads.candidateStatus, tab)
+  const where = and(visible, tabFilter)
 
-  const list = all
-    .filter((l) => tab === "all" || (tab === "priority-a" ? l.priority === "A" : l.candidateStatus === tab))
-    .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0) || a.id.localeCompare(b.id))
-    .slice(0, 300)
-  const q = (t: string) => `/leads?tab=${t}${showFixtures ? "&fixtures=1" : ""}`
+  const [statusRows, priorityRows, fixtureRows, qualifiedRows, totalRows] = await Promise.all([
+    db.select({ status: leads.candidateStatus, n: sql<number>`count(*)::int` }).from(leads).where(visible).groupBy(leads.candidateStatus),
+    db.select({ n: sql<number>`count(*)::int` }).from(leads).where(and(visible, eq(leads.priority, "A"))),
+    db.select({ n: sql<number>`count(*)::int` }).from(leads).where(eq(leads.isFixture, true)),
+    // The validation report only covers qualified leads, so only those are loaded in full.
+    db.select().from(leads).where(and(visible, eq(leads.candidateStatus, "qualified"))),
+    db.select({ n: sql<number>`count(*)::int` }).from(leads).where(where),
+  ])
+  const counts: Record<string, number> = { qualified: 0, unverified: 0, rejected: 0 }
+  for (const r of statusRows) counts[r.status] = Number(r.n)
+  const priorityA = Number(priorityRows[0]?.n ?? 0)
+  const fixtureCount = Number(fixtureRows[0]?.n ?? 0)
+  const { report } = buildExport(qualifiedRows)
+
+  const total = Number(totalRows[0]?.n ?? 0)
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const requested = Math.floor(Number(params.page) || 1)
+  const page = Math.min(Math.max(1, requested), pages)
+  const list = await db
+    .select({
+      id: leads.id, creatorName: leads.creatorName, segment: leads.segment, primaryPlatform: leads.primaryPlatform, followers: leads.followers,
+      candidateStatus: leads.candidateStatus, priority: leads.priority, leadScore: leads.leadScore, countryIso2: leads.countryIso2,
+      contentCount30d: leads.contentCount30d, longformCount60d: leads.longformCount60d, bestChannel: leads.bestChannel,
+      backupChannel: leads.backupChannel, rejectionReason: leads.rejectionReason,
+    })
+    .from(leads)
+    .where(where)
+    .orderBy(sql`${leads.leadScore} desc nulls last`, asc(leads.id))
+    .limit(PAGE_SIZE)
+    .offset((page - 1) * PAGE_SIZE)
+  const q = (t: string, p = 1) => `/leads?tab=${t}${showFixtures ? "&fixtures=1" : ""}${p > 1 ? `&page=${p}` : ""}`
 
   return (
     <div className="px-8 py-8 max-w-7xl mx-auto">
@@ -127,8 +152,37 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           </TableBody>
         </Table>
       </Card>
-      {list.length === 300 && <p className="text-xs text-zinc-500 mt-2">Showing the top 300. Download the CSV for the full list.</p>}
+      <Pager page={page} pages={pages} total={total} pageSize={PAGE_SIZE} href={(p) => q(tab, p)} />
     </div>
+  )
+}
+
+function Pager({ page, pages, total, pageSize, href }: { page: number; pages: number; total: number; pageSize: number; href: (p: number) => string }) {
+  if (total === 0) return null
+  const from = (page - 1) * pageSize + 1
+  const to = Math.min(page * pageSize, total)
+  // First, last, and two either side of the current page, with gaps marked.
+  const nums = [...new Set([1, page - 2, page - 1, page, page + 1, page + 2, pages])].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b)
+  const btn = "inline-flex h-8 min-w-8 items-center justify-center rounded-md px-2 text-xs font-medium"
+  const off = `${btn} border border-zinc-200 text-zinc-700 hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800`
+  return (
+    <nav aria-label="Pagination" className="mt-3 flex flex-wrap items-center justify-between gap-3">
+      <p className="text-xs text-zinc-500 tabular-nums">{from}–{to} of {total}</p>
+      {pages > 1 && (
+        <div className="flex flex-wrap items-center gap-1">
+          {page > 1 ? <Link href={href(page - 1)} className={off} rel="prev">Previous</Link> : <span className={`${off} pointer-events-none opacity-40`} aria-disabled="true">Previous</span>}
+          {nums.map((n, i) => (
+            <span key={n} className="flex items-center gap-1">
+              {i > 0 && n - nums[i - 1] > 1 && <span className="px-1 text-xs text-zinc-400">…</span>}
+              {n === page
+                ? <span aria-current="page" className={`${btn} bg-zinc-900 text-zinc-50 dark:bg-zinc-50 dark:text-zinc-900 tabular-nums`}>{n}</span>
+                : <Link href={href(n)} className={`${off} tabular-nums`}>{n}</Link>}
+            </span>
+          ))}
+          {page < pages ? <Link href={href(page + 1)} className={off} rel="next">Next</Link> : <span className={`${off} pointer-events-none opacity-40`} aria-disabled="true">Next</span>}
+        </div>
+      )}
+    </nav>
   )
 }
 
