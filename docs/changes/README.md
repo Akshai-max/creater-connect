@@ -5,6 +5,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 | Date | Change |
 |---|---|
 | 2026-10-29 | [Guest links and Apple Podcasts](2026-10-29-guest-links-and-apple-podcasts.md): YouTube links in video descriptions (1 unit a handle), podcast directory + RSS feeds with the owner email as a reviewed contact route |
+| 2026-10-29 | [Engine page layout](2026-10-29-engine-page-ui.md): status banner, today's tiles with quota bar, 6-column run table with a lead-mix bar |
 | 2026-10-29 | [Engine page shows discovery](2026-10-29-engine-page-discovery.md): Discovery column (+N new with sources, or no search · next HH:MM), next search and daily units, discovery units counted in run cost |
 | 2026-10-29 | [Lead evidence summarised](2026-10-29-lead-evidence-summary.md): facts tiles, video summary + 5 newest (newest first) with "Show all", one-line contact routes, text as links |
 | 2026-10-29 | [Lead detail page layout](2026-10-29-lead-detail-ui.md): plain header, key-number tiles, step timeline for drafts, grouped evidence, compact contact routes |

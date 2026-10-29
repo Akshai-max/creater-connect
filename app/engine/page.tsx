@@ -1,6 +1,6 @@
 import { db } from "@/lib/db"
 import { engineRuns, seedTestEvents } from "@/lib/db/schema"
-import { desc } from "drizzle-orm"
+import { desc, gte } from "drizzle-orm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -8,6 +8,7 @@ import { listSeedTests } from "@/lib/leads/seed-repo"
 import { seedReport } from "@/lib/leads/seed-test"
 import { parseJson } from "@/lib/leads/ui"
 import { relativeDate } from "@/lib/utils"
+import { AlertTriangle, CheckCircle2, Clock, XCircle } from "lucide-react"
 import { SeedEventButtons } from "./seed-event-buttons"
 
 export const dynamic = "force-dynamic"
@@ -19,21 +20,29 @@ type CycleMetrics = {
 }
 const cycleOf = (metrics: string | null) => parseJson<{ cycle?: CycleMetrics }>(metrics, {}).cycle ?? null
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
+const dayLabel = (iso: string) => new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })
+
+function ago(iso: string, now: Date) {
+  const m = Math.round((now.getTime() - new Date(iso).getTime()) / 60_000)
+  if (m < 1) return "just now"
+  if (m < 60) return `${m} min ago`
+  if (m < 24 * 60) return `${Math.floor(m / 60)} h ago`
+  return relativeDate(iso)
+}
 
 function DiscoveryCell({ cycle }: { cycle: CycleMetrics | null }) {
   const d = cycle?.discovery
-  if (!d) return <span className="text-zinc-400" title="Manual run: no discovery step">—</span>
+  if (!d) return <span className="text-zinc-400" title="Manual run or before discovery was added: no search step">—</span>
   const e = cycle?.entityCheck
   const entity = e && "checked" in e && e.checked > 0
-    ? <div className="text-[11px] text-zinc-500">entity check: {e.individual} individual · {e.excluded} excluded · {e.forReview} for review</div>
-    : e && "failed" in e ? <div className="text-[11px] text-red-600 dark:text-red-400">entity check failed: {e.failed}</div> : null
+    ? <div className="mt-1 text-[11px] text-zinc-500">Entity check: {e.individual} individual · {e.excluded} excluded · {e.forReview} to review</div>
+    : e && "failed" in e ? <div className="mt-1 text-[11px] text-red-600 dark:text-red-400">Entity check failed: {e.failed}</div> : null
   if (d.status === "added" || d.status === "none_new") {
     return (
       <div>
         <details>
-          <summary className="cursor-pointer">
-            {d.added > 0 ? <Badge variant="success">+{d.added} new</Badge> : <Badge variant="secondary">searched, 0 new</Badge>}
-            <span className="ml-1 text-[11px] text-zinc-500">{d.units}u</span>
+          <summary className="cursor-pointer list-none">
+            {d.added > 0 ? <Badge variant="success">+{d.added} new channels</Badge> : <Badge variant="secondary">Searched · none new</Badge>}
           </summary>
           <ul className="mt-1 space-y-0.5 text-[11px] text-zinc-500">{d.sources.map((s, i) => <li key={i}>{s}</li>)}</ul>
         </details>
@@ -41,106 +50,190 @@ function DiscoveryCell({ cycle }: { cycle: CycleMetrics | null }) {
       </div>
     )
   }
-  if (d.status === "failed") return <div><Badge variant="danger">search failed</Badge><div className="text-[11px] text-zinc-500 max-w-56">{d.reason}</div></div>
-  if (d.status === "off") return <span className="text-zinc-400">off</span>
+  if (d.status === "failed") return <div><Badge variant="danger">Search failed</Badge><div className="mt-1 max-w-56 text-[11px] text-zinc-500">{d.reason}</div></div>
+  if (d.status === "off") return <span className="text-xs text-zinc-400">Off</span>
+  if (d.reason && /budget/.test(d.reason)) return <span className="text-xs text-amber-600 dark:text-amber-400" title={d.reason}>Daily search quota used</span>
+  return <span className="text-xs text-zinc-400" title={d.reason}>No search this run</span>
+}
+
+// Qualified / to review / rejected as one stacked bar, with the numbers under it.
+function LeadMix({ q, u, r }: { q: number; u: number; r: number }) {
+  const total = q + u + r || 1
   return (
-    <div className="text-[11px] text-zinc-500 max-w-56" title={d.reason}>
-      no search{d.nextAt ? ` · next ${hhmm(d.nextAt)}` : ""}
-      {d.reason && /budget/.test(d.reason) && <div className="text-amber-600">daily quota for discovery used</div>}
+    <div className="w-40" title={`${q} qualified · ${u} to review · ${r} rejected`}>
+      <div className="flex h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+        <div className="bg-emerald-500" style={{ width: `${(q / total) * 100}%` }} />
+        <div className="bg-amber-400" style={{ width: `${(u / total) * 100}%` }} />
+        <div className="bg-zinc-400 dark:bg-zinc-600" style={{ width: `${(r / total) * 100}%` }} />
+      </div>
+      <div className="mt-1 flex justify-between text-[11px] tabular-nums text-zinc-500">
+        <span className="text-emerald-700 dark:text-emerald-400">{q}</span><span className="text-amber-700 dark:text-amber-400">{u}</span><span>{r}</span>
+      </div>
     </div>
   )
 }
 
 export default async function EnginePage() {
-  const runs = await db.select().from(engineRuns).orderBy(desc(engineRuns.startedAt)).limit(30)
+  const now = new Date()
+  const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0)
+  const [runs, today] = await Promise.all([
+    db.select().from(engineRuns).orderBy(desc(engineRuns.startedAt)).limit(30),
+    db.select({ status: engineRuns.status, metrics: engineRuns.metrics, apiUnits: engineRuns.apiUnits }).from(engineRuns).where(gte(engineRuns.startedAt, startOfDay.toISOString())),
+  ])
   const tests = await listSeedTests(5)
   const events = tests.length ? await db.select().from(seedTestEvents) : []
   const latestCycle = runs.map((r) => cycleOf(r.metrics)).find((c) => c?.discovery) ?? null
-  const lastAdded = runs.find((r) => (cycleOf(r.metrics)?.discovery?.added ?? 0) > 0)
-  const totals = runs.reduce((t, r) => ({ cost: t.cost + (r.costUsd ?? 0), units: t.units + (r.apiUnits ?? 0), failed: t.failed + (r.status === "failed" ? 1 : 0) }), { cost: 0, units: 0, failed: 0 })
+  const disc = latestCycle?.discovery
+  const last = runs[0]
+  const addedToday = today.reduce((s, r) => s + (cycleOf(r.metrics)?.discovery?.added ?? 0), 0)
+  const failedToday = today.filter((r) => r.status === "failed").length
+  const unitsToday = today.reduce((s, r) => s + (r.apiUnits ?? 0), 0)
+  const totalCost = runs.reduce((s, r) => s + (r.costUsd ?? 0), 0)
+
+  const banner = !last ? { tone: "warn" as const, title: "No runs yet", text: "Start one with npm run engine -- --input file.csv, or install the 20-minute schedule." }
+    : last.status === "failed" ? { tone: "danger" as const, title: `Last run failed ${ago(last.startedAt, now)}`, text: "Open its errors in the table below." }
+    : (now.getTime() - new Date(last.startedAt).getTime()) > 60 * 60_000 ? { tone: "warn" as const, title: `No run for ${ago(last.startedAt, now).replace(" ago", "")}`, text: "The engine normally runs every 20 minutes. Check that the scheduled task is still installed." }
+    : { tone: "success" as const, title: `Running normally · last run ${ago(last.startedAt, now)}`, text: `It took ${last.durationMs != null ? `${Math.round(last.durationMs / 1000)} s` : "—"} and checked ${last.totalInput} leads. Runs between searches re-check existing leads and refresh a few channels.` }
+  const BannerIcon = banner.tone === "success" ? CheckCircle2 : banner.tone === "warn" ? AlertTriangle : XCircle
+  const bannerBox = { success: "border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30", warn: "border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30", danger: "border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30" }[banner.tone]
+  const bannerIcon = { success: "text-emerald-600 dark:text-emerald-400", warn: "text-amber-600 dark:text-amber-400", danger: "text-red-600 dark:text-red-400" }[banner.tone]
+
+  const quotaPct = disc?.dailyUnits ? Math.min(100, ((disc.unitsToday ?? 0) / disc.dailyUnits) * 100) : null
+  const tiles = [
+    { label: "Qualified leads", value: last ? `${last.qualified}` : "—", hint: last ? `${last.unverified} to review · ${last.rejected} rejected` : "" },
+    { label: "New channels today", value: `${addedToday}`, hint: disc?.nextAt ? `next search at ${hhmm(disc.nextAt)}` : "no search scheduled" },
+    { label: "Runs today", value: `${today.length}`, hint: failedToday ? `${failedToday} failed` : "none failed" },
+    { label: "YouTube units today", value: unitsToday.toLocaleString("en-IN"), hint: "daily limit 10,000" },
+  ]
 
   return (
-    <div className="px-8 py-8 max-w-7xl mx-auto space-y-6">
+    <div className="mx-auto max-w-7xl space-y-6 px-8 py-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Engine</h1>
-        <p className="text-sm text-zinc-500 mt-1">
-          Discovery and refresh run history. Start a run with <code className="text-xs">npm run engine -- --input file.csv</code>.
-          {" "}{runs.length} runs shown · {totals.failed} failed · ${totals.cost.toFixed(4)} cost · {totals.units} API units
-        </p>
-        {latestCycle?.discovery && (
-          <p className="text-sm text-zinc-500 mt-1">
-            New-channel search: {latestCycle.discovery.nextAt ? <>next at <b className="text-zinc-700 dark:text-zinc-300">{hhmm(latestCycle.discovery.nextAt)}</b></> : "not scheduled"}
-            {latestCycle.discovery.dailyUnits ? ` · ${latestCycle.discovery.unitsToday ?? 0} / ${latestCycle.discovery.dailyUnits} discovery units used today` : ""}
-            {lastAdded ? ` · last added ${cycleOf(lastAdded.metrics)!.discovery!.added} new ${relativeDate(lastAdded.startedAt)}` : ""}.
-            {" "}Runs in between only re-check existing leads (&quot;same&quot;) and refresh a few channels.
-          </p>
-        )}
+        <p className="mt-1 text-sm text-zinc-500">Finds new creators, re-checks existing leads and keeps their data fresh. It runs on its own every 20 minutes.</p>
+      </div>
+
+      <div className={`flex items-start gap-3 rounded-xl border p-4 ${bannerBox}`}>
+        <BannerIcon className={`mt-0.5 h-5 w-5 shrink-0 ${bannerIcon}`} />
+        <div><div className="font-medium">{banner.title}</div><div className="text-sm text-zinc-600 dark:text-zinc-400">{banner.text}</div></div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+        {tiles.map((t) => (
+          <Card key={t.label}>
+            <CardContent className="pt-5">
+              <div className="text-xs text-zinc-500">{t.label}</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums">{t.value}</div>
+              <div className={`mt-1 text-xs ${t.hint.includes("failed") && !t.hint.startsWith("none") ? "text-red-600 dark:text-red-400" : "text-zinc-500"}`}>{t.hint}</div>
+            </CardContent>
+          </Card>
+        ))}
+        <Card className="col-span-2 lg:col-span-1">
+          <CardContent className="pt-5">
+            <div className="text-xs text-zinc-500">Search quota today</div>
+            {quotaPct != null ? (
+              <>
+                <div className="mt-1 text-2xl font-semibold tabular-nums">{Math.round(quotaPct)}%</div>
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"><div className={`h-full rounded-full ${quotaPct >= 90 ? "bg-red-500" : quotaPct >= 60 ? "bg-amber-500" : "bg-sky-500"}`} style={{ width: `${quotaPct}%` }} /></div>
+                <div className="mt-1 text-xs tabular-nums text-zinc-500">{(disc!.unitsToday ?? 0).toLocaleString("en-IN")} of {disc!.dailyUnits!.toLocaleString("en-IN")} units</div>
+              </>
+            ) : <div className="mt-1 text-sm text-zinc-500">Not set up</div>}
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Runs</CardTitle></CardHeader>
+        <CardHeader>
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <CardTitle>Recent runs</CardTitle>
+            <div className="flex items-center gap-3 text-[11px] text-zinc-500">
+              Leads after run:
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />qualified</span>
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400" />to review</span>
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-zinc-400 dark:bg-zinc-600" />rejected</span>
+            </div>
+          </div>
+        </CardHeader>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Run</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Runtime</TableHead>
-              <TableHead className="text-right">Input</TableHead>
-              <TableHead>Discovery</TableHead>
-              <TableHead className="text-right">New / upd / same</TableHead>
-              <TableHead className="text-right">Qual / unver / rej</TableHead>
-              <TableHead className="text-right">Dupes</TableHead>
-              <TableHead className="text-right">Failed</TableHead>
-              <TableHead className="text-right">Cost</TableHead>
-              <TableHead>Errors</TableHead>
+              <TableHead className="pl-6">When</TableHead>
+              <TableHead>Result</TableHead>
+              <TableHead>New channels</TableHead>
+              <TableHead>Changes</TableHead>
+              <TableHead>Leads after run</TableHead>
+              <TableHead className="pr-6 text-right">YouTube units</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {runs.length === 0 && <TableRow><TableCell colSpan={11} className="text-center text-sm text-zinc-500 py-6">No runs yet.</TableCell></TableRow>}
+            {runs.length === 0 && <TableRow><TableCell colSpan={6} className="py-6 text-center text-sm text-zinc-500">No runs yet.</TableCell></TableRow>}
             {runs.map((r) => {
               const errs = parseJson<{ ref: string; message: string }[]>(r.errors, [])
+              const ok = r.status === "succeeded"
+              const dupes = r.duplicates ?? 0, failed = r.failed ?? 0
+              const changes = [
+                r.inserted ? `${r.inserted} added` : null,
+                r.updated ? `${r.updated} updated` : null,
+              ].filter(Boolean)
               return (
-                <TableRow key={r.id}>
-                  <TableCell>
-                    <div className="font-mono text-xs">{r.id}</div>
-                    <div className="text-[11px] text-zinc-500">{r.provider} · {r.inputRef} · {relativeDate(r.startedAt)}</div>
+                <TableRow key={r.id} className="align-top">
+                  <TableCell className="pl-6">
+                    <div className="tabular-nums">{dayLabel(r.startedAt) === dayLabel(now.toISOString()) ? "" : `${dayLabel(r.startedAt)}, `}{hhmm(r.startedAt)}</div>
+                    <div className="font-mono text-[10px] text-zinc-400 dark:text-zinc-600" title={`${r.provider ?? ""} · ${r.inputRef ?? ""}`}>{r.id.replace(/^run_\d+_/, "#")}</div>
                   </TableCell>
-                  <TableCell><Badge variant={r.status === "succeeded" ? "success" : r.status === "failed" ? "danger" : "warn"}>{r.status}</Badge></TableCell>
-                  <TableCell className="text-right tabular-nums">{r.durationMs != null ? `${(r.durationMs / 1000).toFixed(1)}s` : "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{r.totalInput}</TableCell>
-                  <TableCell className="text-xs align-top"><DiscoveryCell cycle={cycleOf(r.metrics)} /></TableCell>
-                  <TableCell className="text-right tabular-nums">{r.inserted} / {r.updated} / {r.unchanged}</TableCell>
-                  <TableCell className="text-right tabular-nums">{r.qualified} / {r.unverified} / {r.rejected}</TableCell>
-                  <TableCell className="text-right tabular-nums">{r.duplicates}</TableCell>
-                  <TableCell className="text-right tabular-nums">{r.failed}</TableCell>
-                  <TableCell className="text-right tabular-nums">${(r.costUsd ?? 0).toFixed(4)}{r.apiUnits ? ` · ${r.apiUnits}u` : ""}</TableCell>
-                  <TableCell className="text-xs max-w-xs">
-                    {errs.length === 0 ? <span className="text-zinc-400">—</span> : (
-                      <details><summary className="cursor-pointer">{errs.length} error{errs.length > 1 ? "s" : ""}</summary>
-                        <ul className="mt-1 space-y-0.5">{errs.slice(0, 20).map((e, i) => <li key={i} className="text-zinc-500"><span className="font-mono">{e.ref}</span>: {e.message}</li>)}</ul>
+                  <TableCell>
+                    <div className="flex items-center gap-1.5">
+                      {ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-500" /> : r.status === "failed" ? <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" /> : <Clock className="h-4 w-4 text-amber-600" />}
+                      <span className="capitalize">{ok ? "Done" : r.status}</span>
+                    </div>
+                    <div className="text-[11px] tabular-nums text-zinc-500">{r.durationMs != null ? `${Math.round(r.durationMs / 1000)} s` : "—"} · {r.totalInput} leads</div>
+                    {errs.length > 0 && (
+                      <details className="mt-1 text-[11px]"><summary className="cursor-pointer text-red-600 dark:text-red-400">{errs.length} error{errs.length > 1 ? "s" : ""}</summary>
+                        <ul className="mt-1 max-w-xs space-y-0.5">{errs.slice(0, 20).map((e, i) => <li key={i} className="text-zinc-500"><span className="font-mono">{e.ref}</span>: {e.message}</li>)}</ul>
                       </details>
                     )}
+                  </TableCell>
+                  <TableCell><DiscoveryCell cycle={cycleOf(r.metrics)} /></TableCell>
+                  <TableCell className="text-xs">
+                    {changes.length ? <div>{changes.join(" · ")}</div> : <div className="text-zinc-400">No changes</div>}
+                    {(dupes > 0 || failed > 0) && (
+                      <div className="mt-0.5 text-[11px] text-zinc-500">
+                        {dupes > 0 && `${dupes} duplicates skipped`}{dupes > 0 && failed > 0 && " · "}
+                        {failed > 0 && <span className="text-red-600 dark:text-red-400">{failed} failed</span>}
+                      </div>
+                    )}
+                  </TableCell>
+                  <TableCell><LeadMix q={r.qualified ?? 0} u={r.unverified ?? 0} r={r.rejected ?? 0} /></TableCell>
+                  <TableCell className="pr-6 text-right tabular-nums">
+                    {r.apiUnits ?? 0}
+                    {(r.costUsd ?? 0) > 0 && <div className="text-[11px] text-zinc-500">${(r.costUsd ?? 0).toFixed(4)}</div>}
                   </TableCell>
                 </TableRow>
               )
             })}
           </TableBody>
         </Table>
+        <div className="border-t border-zinc-200 px-6 py-3 text-[11px] text-zinc-500 dark:border-zinc-800">
+          Latest {runs.length} runs{totalCost > 0 ? ` · $${totalCost.toFixed(4)} spent` : " · no paid API cost"}. Manual run: <code>npm run engine -- --input file.csv</code>
+        </div>
       </Card>
 
       <Card>
-        <CardHeader><CardTitle>Seed tests (owned accounts only)</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle>Seed tests</CardTitle>
+          <p className="text-xs text-zinc-500">End-to-end send tests to your own accounts only.</p>
+        </CardHeader>
         <CardContent className="space-y-4">
-          {tests.length === 0 && <p className="text-sm text-zinc-500">No seed tests yet. Set SEED_TEST_ALLOWLIST, then run <code className="text-xs">npm run seed-test -- start</code>.</p>}
+          {tests.length === 0 && <p className="text-sm text-zinc-500">No seed tests yet. Add your own test accounts to SEED_TEST_ALLOWLIST, then run <code className="text-xs">npm run seed-test -- start</code>.</p>}
           {tests.map((t) => {
             const evs = events.filter((e) => e.seedTestId === t.id)
             const entries = [...new Map(evs.filter((e) => e.eventType === "scheduled").map((e) => [`${e.channel}|${e.recipient}`, { channel: e.channel as any, recipient: e.recipient }])).values()]
             const rep = seedReport(entries, evs)
             return (
-              <div key={t.id} className="rounded-md border border-zinc-200 dark:border-zinc-800 p-3">
-                <div className="flex items-center gap-2 mb-2">
+              <div key={t.id} className="rounded-md border border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="mb-2 flex items-center gap-2">
                   <span className="font-mono text-xs">{t.id}</span>
-                  <Badge variant={rep.pass ? "success" : "warn"}>{rep.pass ? "passed" : "incomplete"}</Badge>
+                  <Badge variant={rep.pass ? "success" : "warn"}>{rep.pass ? "Passed" : "Incomplete"}</Badge>
                   <span className="text-xs text-zinc-500">{relativeDate(t.createdAt)}</span>
                 </div>
                 <Table>
