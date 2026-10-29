@@ -131,6 +131,37 @@ export async function searchChannelPage(
   return { channelIds: ids, nextPageToken: j.nextPageToken ?? null, apiUnits: 100 }
 }
 
+/** YouTube channel links in free text (video descriptions, podcast feeds): channel ids, @handles
+ *  and legacy /user/ names. Bare "@name" mentions are ignored: they may be Instagram or X. */
+export type YouTubeRef = { kind: "id" | "handle" | "user"; value: string }
+export function extractYouTubeRefs(text: string): YouTubeRef[] {
+  const out = new Map<string, YouTubeRef>()
+  const add = (r: YouTubeRef) => out.set(`${r.kind}:${r.value.toLowerCase()}`, r)
+  for (const m of text.matchAll(/youtube\.com\/channel\/(UC[\w-]{22})/gi)) add({ kind: "id", value: m[1] })
+  for (const m of text.matchAll(/youtube\.com\/@([\w.-]{3,30})/gi)) add({ kind: "handle", value: m[1].replace(/[.\-]+$/, "") })
+  for (const m of text.matchAll(/youtube\.com\/user\/([\w.-]{2,40})/gi)) add({ kind: "user", value: m[1].replace(/[.\-]+$/, "") })
+  return [...out.values()]
+}
+
+/** Channel ids for refs: ids are free; a handle or user name costs 1 unit (channels?forHandle / forUsername). */
+export async function resolveYouTubeRefs(refs: YouTubeRef[], opts: { apiKey: string | undefined; fetcher?: Fetcher }): Promise<{ ids: Map<string, string>; apiUnits: number }> {
+  const fetcher = opts.fetcher ?? defaultFetcher
+  const ids = new Map<string, string>() // ref key → channel id
+  let units = 0
+  for (const r of refs) {
+    const key = `${r.kind}:${r.value.toLowerCase()}`
+    if (r.kind === "id") { ids.set(key, r.value); continue }
+    if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set.")
+    const param = r.kind === "handle" ? `forHandle=${encodeURIComponent("@" + r.value)}` : `forUsername=${encodeURIComponent(r.value)}`
+    units += 1
+    const res = await fetcher(`https://www.googleapis.com/youtube/v3/channels?part=id&${param}&key=${encodeURIComponent(opts.apiKey)}`)
+    if (!res.ok) throw new ProviderError("youtube", `channels HTTP ${res.status}`)
+    const id = (await res.json()).items?.[0]?.id
+    if (id) ids.set(key, id)
+  }
+  return { ids, apiUnits: units }
+}
+
 /** Channels behind the newest videos matching `query` published after `publishedAfter` (100 units).
  *  Each call covers a new time window, so results are mostly channels not seen before, and every
  *  one has just posted. */

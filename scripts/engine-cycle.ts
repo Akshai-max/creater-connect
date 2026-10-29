@@ -10,7 +10,9 @@
 // Before the refresh, each cycle can also add leads:
 //   1. Discovery (lib/leads/cycle-discovery.ts; at most every --discover-every minutes, capped at
 //      --discover-units YouTube units a day): featured channels of up to --featured confirmed
-//      individual creators, then --searches searches from data/discovery-queries.txt × --regions,
+//      individual creators, guest links from video descriptions (--guest-scan existing channels
+//      read per step), one Apple Podcasts directory search whose RSS feeds link a YouTube channel
+//      (--no-apple turns it off; feed owner emails fill leads that have none), then --searches searches from data/discovery-queries.txt × --regions,
 //      alternating between the newest videos since the last search and a depth-first channel
 //      search (--search-mode both|video|channel; a channel page with fewer than --min-new new
 //      channels ends that search). Channels not already in the input are appended to it and to
@@ -25,7 +27,7 @@ import { parseArgs } from "node:util"
 import { parse } from "csv-parse/sync"
 import { runEngine } from "../lib/leads/engine"
 import { csvEscape } from "../lib/leads/export"
-import { discoverStep, emptyDiscoveryState, type DiscoveryState } from "../lib/leads/cycle-discovery"
+import { applyFeedEmail, discoverStep, emptyDiscoveryState, type DiscoveryState, type FeedEmail } from "../lib/leads/cycle-discovery"
 
 const { values } = parseArgs({
   options: {
@@ -39,6 +41,11 @@ const { values } = parseArgs({
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
     featured: { type: "string", default: "10" },
+    // Guest links: existing channels whose video descriptions are read per step (2 units each).
+    "guest-scan": { type: "string", default: "25" },
+    // Apple Podcasts directory + RSS feeds (no YouTube units except resolving a feed's YouTube link).
+    "no-apple": { type: "boolean", default: false },
+    "apple-feeds": { type: "string", default: "15" },
     "discover-every": { type: "string", default: "40" },
     "discover-units": { type: "string", default: "7000" },
     "no-discover": { type: "boolean", default: false },
@@ -76,6 +83,17 @@ function appendRows(input: string, idsFile: string, rows: Record<string, unknown
   fs.appendFileSync(idsFile, rows.map((r) => String(r.stable_creator_id)).join("\n") + "\n")
 }
 
+function fillEmails(input: string, updates: Record<string, FeedEmail>): number {
+  const rows = parse(fs.readFileSync(input, "utf8"), { columns: true, skip_empty_lines: true }) as Record<string, string>[]
+  let n = 0
+  for (const row of rows) if (updates[row.stable_creator_id] && applyFeedEmail(row, updates[row.stable_creator_id])) n++
+  if (!n) return 0
+  const cols = Object.keys(rows[0] ?? {})
+  for (const c of ["email", "email_evidence_url", "email_last_active", "email_source", "email_business_use", "email_quote", "review_notes"]) if (!cols.includes(c)) cols.push(c)
+  fs.writeFileSync(input, [cols.join(","), ...rows.map((r) => cols.map((c) => csvEscape(String(r[c] ?? ""))).join(","))].join("\n") + "\n")
+  return n
+}
+
 // What this cycle's discovery did, recorded with the engine run for the Engine page.
 export type DiscoveryReport = {
   status: "added" | "none_new" | "skipped" | "failed" | "off"
@@ -111,7 +129,12 @@ async function discover(): Promise<DiscoveryReport> {
     mode, minNew: Number(values["min-new"]), featuredPerStep: Number(values.featured),
     // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
     featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
+    guestScanPerStep: Number(values["guest-scan"]),
+    apple: !values["no-apple"], appleFeedsPerStep: Number(values["apple-feeds"]),
   })
+  // Feed emails for leads already in the file that have none (never overwrites an email).
+  const filled = Object.keys(r.emailUpdates).length ? fillEmails(values.input!, r.emailUpdates) : 0
+  if (filled) r.searched.push(`podcast feed emails added to ${filled} existing leads`)
   const budget = { unitsToday: r.state.unitsToday, dailyUnits: Number(values["discover-units"]) }
   if (r.skipped) {
     console.log(`[discover] skipped: ${r.skipped}`)
