@@ -20,7 +20,9 @@
 //      the id file. Missing queries file = searches off (featured channels still run).
 //   2. Entity check (scripts/classify-entities.ts) on the input. Answers are cached, so only new
 //      channels cost model calls (Groq/Gemini, see the AI usage page).
-// --no-discover / --no-classify turn either off. A failure in either is logged and the refresh
+//   3. Website contacts (scripts/find-contacts.ts): up to --contacts-limit leads without an email get
+//      their own linked site read for a published business email (1 unit each, robots.txt honoured).
+// --no-discover / --no-classify / --no-contacts turn each off. A failure in either is logged and the refresh
 // still runs.
 import fs from "node:fs"
 import { spawnSync } from "node:child_process"
@@ -56,6 +58,10 @@ const { values } = parseArgs({
     // Entity checks per cycle (cached, so the rest are done next cycle). Keeps a 500-channel batch
     // from holding the cycle lock for an hour while Groq/Gemini rate limits are waited out.
     "classify-limit": { type: "string", default: "150" },
+    // Website contact lookups per cycle (scripts/find-contacts.ts): 1 YouTube unit each plus a few
+    // pages on the creator's own site. Each lead is looked up once a month at most.
+    "contacts-limit": { type: "string", default: "25" },
+    "no-contacts": { type: "boolean", default: false },
   },
 })
 
@@ -170,6 +176,23 @@ function classify(): EntityReport | null {
   }
 }
 
+// Business emails from creators' own websites, for leads that have none (its own script, like classify).
+type ContactsReport = { checked: number; found: number; business: number; units: number; pages: number; errors: number } | { failed: string } | null
+function findContacts(): ContactsReport {
+  if (values["no-contacts"]) return null
+  const r = spawnSync(process.execPath, [...process.execArgv, "scripts/find-contacts.ts", "--in", values.input!, "--limit", values["contacts-limit"]!], { encoding: "utf8" })
+  const summary = /^\{\r?\n[\s\S]*^\}\s*$/m.exec(r.stdout ?? "")?.[0]
+  try {
+    const s = JSON.parse(summary ?? "")
+    console.log(`[contacts] checked ${s.checked} of ${s.eligible}: ${s.found} emails found (${s.business} business), ${s.pages} pages, ${s.units} units, ${s.errors} errors`)
+    return { checked: s.checked, found: s.found, business: s.business, units: s.units, pages: s.pages, errors: s.errors }
+  } catch {
+    const why = (r.stderr || r.stdout || "").trim().split("\n").slice(-2).join(" ").slice(0, 300)
+    console.log(`[contacts] failed (exit ${r.status}): ${why}`)
+    return { failed: why || `exit ${r.status}` }
+  }
+}
+
 async function main() {
   if (!acquireLock()) {
     console.log("[cycle] previous run still going, skipping")
@@ -184,6 +207,7 @@ async function main() {
       discovery = { status: "failed", added: 0, units: 0, sources: [], reason: (e as Error).message.slice(0, 300) }
     }
     const entityCheck = classify()
+    const contacts = findContacts()
 
     const lines = fs.readFileSync(values.ids!, "utf8").split(/\r?\n/).filter((l) => l.replace(/#.*/, "").trim())
     const size = Math.max(1, Number(values.slice))
@@ -198,8 +222,8 @@ async function main() {
       input: values.input,
       youtubeIdsFile: SLICE_FILE,
       log: (m) => console.log(`[engine] ${m}`),
-      extraMetrics: { cycle: { discovery, entityCheck } },
-      extraApiUnits: discovery.units,
+      extraMetrics: { cycle: { discovery, entityCheck, contacts } },
+      extraApiUnits: discovery.units + (contacts && "units" in contacts ? contacts.units : 0),
     })
     // Advance only after a successful run, so a failed slice is retried next time.
     if (s.status === "succeeded") writeState({ cursor: cursor + slice.length, lastRun: s.runId })

@@ -4,6 +4,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Website contact finder](2026-10-29-website-contact-finder.md): business emails from creators' own sites and link pages (robots.txt honoured, never guessed); qualified and Priority A 6 → 10 |
 | 2026-10-29 | [AI agent page redesign](2026-10-29-agent-page-redesign.md): status pill, slow-local-model notice, source tiles, plain setup rows, run states incl. interrupted, errors in plain words, one type scale |
 | 2026-10-29 | [AI agent page fixes](2026-10-29-agent-page-fixes.md): counts per source, "no proposals" state, readable durations, model notes without reasoning, copy-the-fix button |
 | 2026-10-29 | [Discovery: 500 per step](2026-10-29-discovery-500-per-step.md): `--max-new 500`, 12 searches a step, entity check capped at 150 model calls a cycle (limit now counts calls, not rows) |
