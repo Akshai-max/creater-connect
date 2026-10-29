@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [Leads: New tab](2026-10-29-leads-new-tab.md): leads added in the last 2 h / 24 h / 7 days, newest first, with an Added column |
+| 2026-10-29 | [Leads page UI](2026-10-29-leads-page-ui.md): search, country filter, sortable headers, tab counts, a Why column, validation checklist |
 | 2026-10-29 | [Guest links and Apple Podcasts](2026-10-29-guest-links-and-apple-podcasts.md): YouTube links in video descriptions (1 unit a handle), podcast directory + RSS feeds with the owner email as a reviewed contact route |
 | 2026-10-29 | [Engine page layout](2026-10-29-engine-page-ui.md): status banner, today's tiles with quota bar, 6-column run table with a lead-mix bar |
 | 2026-10-29 | [Engine page shows discovery](2026-10-29-engine-page-discovery.md): Discovery column (+N new with sources, or no search · next HH:MM), next search and daily units, discovery units counted in run cost |
