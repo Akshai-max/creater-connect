@@ -4,14 +4,17 @@
 // input so every lead is requalified. A full refresh of 275 channels costs ~556 quota units, so doing it
 // 72 times a day would blow the 10,000-unit daily quota. A 10-channel slice (~21 units) per run walks
 // the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
-// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (1 search every
-// 40 min, ~200 units each, capped at 7,000) ≈ 8,500 of 10,000.
+// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (1 search and up to
+// 10 featured-channel lookups every 40 min, ~210 units each, capped at 7,000) ≈ 8,500 of 10,000.
 //
 // Before the refresh, each cycle can also add leads:
-//   1. Discovery (at most every --discover-every minutes, capped at --discover-units YouTube units
-//      a day): the next --searches searches from data/discovery-queries.txt × --regions, one
-//      results page deeper each time. Channels not already in the input are appended to it and
-//      to the id file. Missing queries file = no discovery.
+//   1. Discovery (lib/leads/cycle-discovery.ts; at most every --discover-every minutes, capped at
+//      --discover-units YouTube units a day): featured channels of up to --featured confirmed
+//      individual creators, then --searches searches from data/discovery-queries.txt × --regions,
+//      alternating between the newest videos since the last search and a depth-first channel
+//      search (--search-mode both|video|channel; a channel page with fewer than --min-new new
+//      channels ends that search). Channels not already in the input are appended to it and to
+//      the id file. Missing queries file = searches off (featured channels still run).
 //   2. Entity check (scripts/classify-entities.ts) on the input. Answers are cached, so only new
 //      channels cost model calls (Groq/Gemini, see the AI usage page).
 // --no-discover / --no-classify turn either off. A failure in either is logged and the refresh
@@ -30,8 +33,12 @@ const { values } = parseArgs({
     ids: { type: "string", default: "data/channel-ids-2026-10-29.txt" },
     slice: { type: "string", default: "10" },
     queries: { type: "string", default: "data/discovery-queries.txt" },
-    regions: { type: "string", default: "US,GB,CA,AU,IE,NZ,SG" },
+    // English results barely differ between regions, so a few regions and more queries find more.
+    regions: { type: "string", default: "US,GB,AU" },
     searches: { type: "string", default: "1" },
+    "search-mode": { type: "string", default: "both" },
+    "min-new": { type: "string", default: "10" },
+    featured: { type: "string", default: "10" },
     "discover-every": { type: "string", default: "40" },
     "discover-units": { type: "string", default: "7000" },
     "no-discover": { type: "boolean", default: false },
@@ -71,17 +78,21 @@ function appendRows(input: string, idsFile: string, rows: Record<string, unknown
 
 async function discover(): Promise<number> {
   if (values["no-discover"]) return 0
-  if (!fs.existsSync(values.queries!)) {
-    console.log(`[discover] skipped: no ${values.queries} (one search query per line)`)
-    return 0
-  }
-  const queries = fs.readFileSync(values.queries!, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim()).filter(Boolean)
+  const queries = fs.existsSync(values.queries!)
+    ? fs.readFileSync(values.queries!, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim()).filter(Boolean)
+    : []
+  if (!queries.length) console.log(`[discover] no queries in ${values.queries} (one search per line): searches off`)
   const existing = parse(fs.readFileSync(values.input!, "utf8"), { columns: true, skip_empty_lines: true }) as Record<string, string>[]
+  const mode = values["search-mode"] as "both" | "video" | "channel"
+  if (!["both", "video", "channel"].includes(mode)) throw new Error(`--search-mode must be both, video or channel (got ${mode})`)
   const r = await discoverStep({
     queries, regions: values.regions!.split(",").map((x) => x.trim()).filter(Boolean),
     existingIds: new Set(existing.map((x) => x.stable_creator_id)),
     state: readState().discovery ?? emptyDiscoveryState(), now: new Date(), apiKey: process.env.YOUTUBE_API_KEY,
     searches: Number(values.searches), dailyUnits: Number(values["discover-units"]), everyMin: Number(values["discover-every"]),
+    mode, minNew: Number(values["min-new"]), featuredPerStep: Number(values.featured),
+    // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
+    featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
   })
   if (r.skipped) {
     console.log(`[discover] skipped: ${r.skipped}`)

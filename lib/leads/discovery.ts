@@ -131,6 +131,38 @@ export async function searchChannelPage(
   return { channelIds: ids, nextPageToken: j.nextPageToken ?? null, apiUnits: 100 }
 }
 
+/** Channels behind the newest videos matching `query` published after `publishedAfter` (100 units).
+ *  Each call covers a new time window, so results are mostly channels not seen before, and every
+ *  one has just posted. */
+export async function searchRecentVideoChannels(
+  query: string,
+  region: string,
+  opts: { apiKey: string | undefined; publishedAfter: string; fetcher?: Fetcher },
+): Promise<{ channelIds: string[]; videos: number; apiUnits: number }> {
+  if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set. Create one at console.cloud.google.com (YouTube Data API v3).")
+  const fetcher = opts.fetcher ?? defaultFetcher
+  const u =
+    `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&maxResults=50` +
+    `&relevanceLanguage=en&regionCode=${encodeURIComponent(region)}&q=${encodeURIComponent(query)}` +
+    `&publishedAfter=${encodeURIComponent(opts.publishedAfter)}&key=${encodeURIComponent(opts.apiKey)}`
+  const res = await fetcher(u)
+  if (!res.ok) throw new ProviderError("youtube", `search HTTP ${res.status}`)
+  const items: { snippet?: { channelId?: string } }[] = (await res.json()).items ?? []
+  const ids = [...new Set(items.map((it) => it.snippet?.channelId).filter((x): x is string => !!x))]
+  return { channelIds: ids, videos: items.length, apiUnits: 100 }
+}
+
+/** Channels a creator features on their own channel page (channelSections, 1 unit per channel). */
+export async function fetchFeaturedChannels(channelId: string, opts: { apiKey: string | undefined; fetcher?: Fetcher }): Promise<{ channelIds: string[]; apiUnits: number }> {
+  if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set.")
+  const fetcher = opts.fetcher ?? defaultFetcher
+  const res = await fetcher(`https://www.googleapis.com/youtube/v3/channelSections?part=contentDetails&channelId=${encodeURIComponent(channelId)}&key=${encodeURIComponent(opts.apiKey)}`)
+  if (!res.ok) throw new ProviderError("youtube", `channelSections HTTP ${res.status}`)
+  const items: { contentDetails?: { channels?: string[] } }[] = (await res.json()).items ?? []
+  const ids = [...new Set(items.flatMap((s) => s.contentDetails?.channels ?? []))].filter((id) => id !== channelId)
+  return { channelIds: ids, apiUnits: 1 }
+}
+
 export async function fetchChannelsViaApi(channelIds: string[], opts: { apiKey: string | undefined; longformMinSeconds?: number; fetcher?: Fetcher }) {
   if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set.")
   const fetcher = opts.fetcher ?? defaultFetcher
