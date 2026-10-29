@@ -20,14 +20,14 @@ const nav = [
 export function Sidebar() {
   const pathname = usePathname()
   return (
-    <aside className="hidden md:flex w-60 flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
+    <aside className="hidden md:flex sticky top-0 h-screen w-60 shrink-0 flex-col border-r border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950">
       <div className="px-6 py-5 border-b border-zinc-200 dark:border-zinc-800">
         <Link href="/" className="font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
           Creator <span className="text-zinc-500 dark:text-zinc-400">CRM</span>
         </Link>
         <div className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">Discovery & roster</div>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {nav.map((item) => {
           const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
           const Icon = item.icon
