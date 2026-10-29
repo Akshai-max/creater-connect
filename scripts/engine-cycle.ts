@@ -4,8 +4,8 @@
 // input so every lead is requalified. A full refresh of 275 channels costs ~556 quota units, so doing it
 // 72 times a day would blow the 10,000-unit daily quota. A 10-channel slice (~21 units) per run walks
 // the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
-// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (1 search and up to
-// 10 featured-channel lookups every 40 min, ~210 units each, capped at 7,000) ≈ 8,500 of 10,000.
+// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (2 searches and up to
+// 25 featured-channel lookups every 20 min, ~250-400 units each, capped at 7,000) ≈ 8,500 of 10,000.
 //
 // Before the refresh, each cycle can also add leads:
 //   1. Discovery (lib/leads/cycle-discovery.ts; at most every --discover-every minutes, capped at
@@ -37,16 +37,16 @@ const { values } = parseArgs({
     queries: { type: "string", default: "data/discovery-queries.txt" },
     // English results barely differ between regions, so a few regions and more queries find more.
     regions: { type: "string", default: "US,GB,AU" },
-    searches: { type: "string", default: "1" },
+    searches: { type: "string", default: "2" },
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
-    featured: { type: "string", default: "10" },
+    featured: { type: "string", default: "25" },
     // Guest links: existing channels whose video descriptions are read per step (2 units each).
     "guest-scan": { type: "string", default: "25" },
     // Apple Podcasts directory + RSS feeds (no YouTube units except resolving a feed's YouTube link).
     "no-apple": { type: "boolean", default: false },
     "apple-feeds": { type: "string", default: "15" },
-    "discover-every": { type: "string", default: "40" },
+    "discover-every": { type: "string", default: "20" },
     "discover-units": { type: "string", default: "7000" },
     "no-discover": { type: "boolean", default: false },
     "no-classify": { type: "boolean", default: false },
