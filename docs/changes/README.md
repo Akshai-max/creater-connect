@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-29 | [AI usage page redesign](2026-10-29-ai-usage-redesign.md): one-line status, grouped switches, plain-language problems, call log collapsed |
+| 2026-10-29 | [Ollama live status](2026-10-29-ollama-live-status.md): the AI usage page says "unreachable" or "model missing" instead of "available" |
 | 2026-10-29 | [Gemini Flash Lite](2026-10-29-gemini-flash-lite.md): 500 requests a day instead of 20, retry hint read, saved rests per model |
 | 2026-10-29 | [Pace Groq from its rate-limit headers](2026-10-29-groq-rate-limit-pacing.md): waits for tokens to refill instead of getting 429s (78 → 0) |
 | 2026-10-29 | [First run on Groq and Gemini](2026-10-29-first-free-llm-run.md): current models, 400s don't bench, waits out per-minute limits, 3 qualified (all A) |
