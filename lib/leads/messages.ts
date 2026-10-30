@@ -22,7 +22,9 @@ export function sortedContent(items: ContentItem[]): ContentItem[] {
 }
 
 const firstName = (name: string) => name.trim().split(/\s+/)[0]
-const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1).trimEnd()}…`)
+// Never cut between the two halves of an emoji or a styled letter (𝐒): half a character is invalid
+// text, and the database rejects the whole lead.
+const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n - 1).replace(/[\uD800-\uDBFF]$/, "").trimEnd()}…`)
 const kind = (i: ContentItem) => (i.isLongform ? "episode" : "video")
 
 export function personalizationHook(item: ContentItem | undefined): string | null {

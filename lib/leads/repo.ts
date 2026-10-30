@@ -91,8 +91,16 @@ function evidenceRows(p: ProcessedLead, nowIso: string) {
   return rows
 }
 
+// Safety net for every saved row: a string holding half an emoji (a lone surrogate) makes the
+// database reject the whole request ("unexpected end of hex escape"). Replaces it with U+FFFD.
+function wellFormed<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = { ...row }
+  for (const [k, v] of Object.entries(out)) if (typeof v === "string") out[k] = v.toWellFormed()
+  return out as T
+}
+
 export async function persistLead(p: ProcessedLead, runId: string, nowIso: string, isFixture: boolean) {
-  const values = leadValues(p, runId, nowIso, isFixture)
+  const values = wellFormed(leadValues(p, runId, nowIso, isFixture))
   const { id: _id, ...updatable } = values
   const upsert = db.insert(leads).values(values).onConflictDoUpdate({ target: leads.identityKey, set: updatable })
   if (!p.changed) {
@@ -102,7 +110,7 @@ export async function persistLead(p: ProcessedLead, runId: string, nowIso: strin
   await db.batch([
     upsert,
     db.delete(leadEvidence).where(eq(leadEvidence.leadId, p.id)),
-    ...chunk(evidenceRows(p, nowIso), 200).map((c) => db.insert(leadEvidence).values(c)),
+    ...chunk(evidenceRows(p, nowIso).map(wellFormed), 200).map((c) => db.insert(leadEvidence).values(c)),
   ] as any)
 }
 
@@ -133,7 +141,7 @@ export async function upsertSequences(l: Lead, nowIso: string): Promise<number> 
   const rec = recommendChannels(input.contacts, new Date(nowIso))
   const msgs = generateSequences(input, rec, senderFromEnv())
   const stmts = msgs.map((m) => {
-    const v = {
+    const v = wellFormed({
       id: `${l.id}-${m.channel}-${m.sequence}`,
       leadId: l.id,
       channel: m.channel,
@@ -144,7 +152,7 @@ export async function upsertSequences(l: Lead, nowIso: string): Promise<number> 
       unavailableReason: m.unavailableReason,
       evidenceRefs: JSON.stringify(m.evidenceRefs),
       updatedAt: nowIso,
-    }
+    })
     const { id: _id, leadId: _l, channel: _c, sequence: _s, ...set } = v
     // Never clobber a human edit or an approval.
     return db.insert(outreachMessages).values(v).onConflictDoUpdate({

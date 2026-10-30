@@ -37,6 +37,18 @@ test("long titles still fit the LinkedIn 300-char connection note", () => {
   assert.ok(li.body.length <= 300, String(li.body.length))
 })
 
+test("shortened titles never end in half an emoji (the database rejects the whole lead)", () => {
+  const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+  // Shift the emoji and styled letters across every cut point the subject and hook can use.
+  for (let k = 20; k <= 120; k++) {
+    const title = "A".repeat(k) + " 🤯🙏 𝐒𝐞𝐥𝐥𝐢𝐧𝐠 it's the future ".repeat(4)
+    const items = JSON.stringify([{ url: "https://www.youtube.com/watch?v=emoji1", title, publishedAt: "2026-10-25", isLongform: true }, { url: "https://www.youtube.com/watch?v=emoji2", title, publishedAt: "2026-10-20", isLongform: true }])
+    const p = one({ ...FIXTURE_ROWS[0], content_items: items })
+    for (const m of p.messages) for (const s of [m.subject ?? "", m.body]) assert.ok(!lone.test(s), `k=${k} ${m.channel}#${m.sequence}: ${JSON.stringify(s.slice(0, 80))}`)
+    assert.ok(!lone.test(p.firstMessage ?? "") && !lone.test(p.hook ?? ""), `k=${k} hook/first message`)
+  }
+})
+
 test("channels without verified evidence are unavailable with a reason, never invented", () => {
   const p = one({ ...FIXTURE_ROWS[0], linkedin_url: "", instagram_evidence_url: "" })
   const li = p.messages.filter((m) => m.channel === "linkedin")
