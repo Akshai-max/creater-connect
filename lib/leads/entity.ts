@@ -12,7 +12,9 @@ export type EntitySource = {
   channelUrl: string
   title: string
   description: string
-  videos: { url: string; title: string }[]
+  // description: optional, fetched only for leads the title-only check couldn't decide (hosts often
+  // write "I'm …" or "hosted by …" there). A quote found in it points at that video.
+  videos: { url: string; title: string; description?: string }[]
 }
 
 export type EntityVerdict = {
@@ -44,7 +46,10 @@ export function entityPrompt(src: EntitySource): string {
     `Channel name: ${src.title}`,
     `Channel description: ${src.description.slice(0, 900) || "(none)"}`,
     `Recent video titles:`,
-    ...src.videos.slice(0, 8).map((v) => `- ${v.title}`),
+    ...src.videos.filter((v) => v.title).slice(0, 8).map((v) => `- ${v.title}`),
+    ...(src.videos.some((v) => v.description)
+      ? [`Recent video descriptions:`, ...src.videos.filter((v) => v.description).slice(0, 5).map((v) => `- ${v.description!.replace(/\s+/g, " ").slice(0, 400)}`)]
+      : []),
   ].join("\n")
 }
 
@@ -54,6 +59,7 @@ export function locateQuote(src: EntitySource, quote: string): string | null {
   if (q.length < 6) return null
   if (norm(src.title).includes(q) || norm(src.description).includes(q)) return `${src.channelUrl}/about`
   const v = src.videos.find((x) => norm(x.title).includes(q))
+    ?? src.videos.find((x) => x.description && norm(x.description.replace(/\s+/g, " ").slice(0, 400)).includes(q))
   return v ? v.url : null
 }
 

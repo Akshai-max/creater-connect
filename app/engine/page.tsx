@@ -136,7 +136,12 @@ export default async function EnginePage() {
         ))}
         <Card className="col-span-2 lg:col-span-1">
           <CardContent className="pt-5">
-            <div className="text-xs text-zinc-500">This key&apos;s quota today</div>
+            <div className="text-xs text-zinc-500" title="Counted by the app from the calls it made: an API key can't read YouTube's own count (that's in Google Cloud console → YouTube Data API v3 → Quotas). When YouTube replies that the quota is used, the app goes by that.">
+              This key&apos;s quota today <span className="text-zinc-400">· app&apos;s count</span>
+            </div>
+            {disc?.sources?.some((s) => s.startsWith("YouTube says")) && (
+              <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">YouTube replied that this key&apos;s quota is used</div>
+            )}
             {quotaPct != null ? (
               <div className="mt-2 space-y-2.5">
                 {/* The key's two daily limits, as Google's quota page lists them. */}

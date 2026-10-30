@@ -6,8 +6,9 @@
 // the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
 // Daily YouTube budget per key (Cloud project), as its quota page lists it: 100 searches ("Search
 // Queries per day") and 10,000 units for everything else ("Queries per day"). A discovery step makes
-// 10 searches and adds up to 400 new channels (~2 units each), about 930 units, so a key gives about
-// 10 search steps; after that featured channels, guest links and Apple Podcasts keep running on units.
+// 50 searches and fetches as many new channels as the remaining units allow (~2 units each), so a
+// fresh key gives roughly 3,000-4,500 new channels in two steps; after that featured channels, guest
+// links and Apple Podcasts keep running on what's left, and a new key starts again.
 // Refresh (~21 a cycle) and contact units count against the same counter, with 100 kept back for
 // refreshes. A new key (new fingerprint) starts fresh counters.
 //
@@ -43,10 +44,11 @@ const { values } = parseArgs({
     slice: { type: "string", default: "10" },
     queries: { type: "string", default: "data/discovery-queries.txt" },
     // English results barely differ between regions, so a few regions and more queries find more.
-    regions: { type: "string", default: "US,GB,AU" },
-    searches: { type: "string", default: "10" },
+    regions: { type: "string", default: "US,GB,AU,CA,IE,NZ,SG" },
+    searches: { type: "string", default: "50" },
     // New channels added per discovery step; extra ones carry over to the next step.
-    "max-new": { type: "string", default: "400" },
+    // A ceiling: each step takes as many new channels as the key's remaining units allow (~2 each).
+    "max-new": { type: "string", default: "5000" },
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
     featured: { type: "string", default: "25" },
@@ -69,7 +71,7 @@ const { values } = parseArgs({
     "no-classify": { type: "boolean", default: false },
     // Entity checks per cycle (cached, so the rest are done next cycle). Keeps a 500-channel batch
     // from holding the cycle lock for an hour while Groq/Gemini rate limits are waited out.
-    "classify-limit": { type: "string", default: "150" },
+    "classify-limit": { type: "string", default: "400" },
     // Website contact lookups per cycle (scripts/find-contacts.ts): 1 YouTube unit each plus a few
     // pages on the creator's own site. Each lead is looked up once a month at most.
     "contacts-limit": { type: "string", default: "25" },

@@ -36,7 +36,10 @@ export function providersFromEnv(env: Env = process.env): ProviderCfg[] {
 
 // ── Failure classification ──────────────────────────────────────────────────
 export type CallStatus = "ok" | "rate_limited" | "quota_exhausted" | "error" | "invalid_output"
-export type Failure = { status: Exclude<CallStatus, "ok">; cooldownMs: number; message: string }
+// retryFrom: where the pause length came from. "provider" = the reply said when to retry
+// (retry-after header, "try again in 15.5s", "Please retry in 19h46m", Gemini's retryDelay);
+// "estimated" = the reply gave no time, so the router picked one (and says so in the message).
+export type Failure = { status: Exclude<CallStatus, "ok">; cooldownMs: number; message: string; retryFrom?: "provider" | "estimated" }
 
 /** Milliseconds until the next midnight in US Pacific time (when Gemini's daily quota resets). */
 export function msUntilPacificMidnight(now: Date): number {
@@ -48,13 +51,24 @@ export function msUntilPacificMidnight(now: Date): number {
 
 export function classifyFailure(httpStatus: number | null, body: string, retryAfter: string | null, now: Date): Failure {
   const msg = body.replace(/\s+/g, " ").slice(0, 300)
-  // Groq sends retry-after; Gemini sends none but says "Please retry in 12.3s" in the body.
+  // The provider's own retry time, in the forms the replies use: a retry-after header (seconds),
+  // Groq's "Please try again in 15.552s", Gemini's "Please retry in 19h46m2.9s" and its
+  // RetryInfo "retryDelay": "52s".
   const retryMs = retryAfter && /^\d+(\.\d+)?$/.test(retryAfter) ? Math.ceil(Number(retryAfter) * 1000)
-    : parseResetMs(/retry in ((?:[\d.]+(?:ms|h|m|s))+)/i.exec(body)?.[1] ?? null)
+    : parseResetMs(/(?:retry|try again) in ((?:[\d.]+(?:ms|h|m|s))+)/i.exec(body)?.[1] ?? null)
+      ?? parseResetMs(/"retryDelay"\s*:\s*"([\d.]+s)"/.exec(body)?.[1] ?? null)
   if (httpStatus === 429) {
     const daily = /per ?day|daily|PerDay|RESOURCE_EXHAUSTED.*day|tokens per day|requests per day|\bRPD\b|\bTPD\b/i.test(body)
-    if (daily) return { status: "quota_exhausted", cooldownMs: retryMs && retryMs > 60_000 ? retryMs : msUntilPacificMidnight(now), message: `daily quota used up: ${msg}` }
-    return { status: "rate_limited", cooldownMs: retryMs ?? 60_000, message: `rate limited: ${msg}` }
+    // Use the reply's time even when it's short: Groq's daily token limit is a rolling window, so
+    // "try again in 15s" is right, and resting until midnight would bench it for hours for nothing.
+    if (daily) {
+      return retryMs != null
+        ? { status: "quota_exhausted", cooldownMs: retryMs, message: `daily quota used up (retry time from the reply): ${msg}`, retryFrom: "provider" }
+        : { status: "quota_exhausted", cooldownMs: msUntilPacificMidnight(now), message: `daily quota used up (the reply gave no retry time; estimated midnight US Pacific): ${msg}`, retryFrom: "estimated" }
+    }
+    return retryMs != null
+      ? { status: "rate_limited", cooldownMs: retryMs, message: `rate limited: ${msg}`, retryFrom: "provider" }
+      : { status: "rate_limited", cooldownMs: 60_000, message: `rate limited (the reply gave no retry time; estimated 60 s): ${msg}`, retryFrom: "estimated" }
   }
   if (httpStatus === 401 || httpStatus === 403) return { status: "error", cooldownMs: 60 * 60_000, message: `key rejected (HTTP ${httpStatus}) - check the API key: ${msg}` }
   if (httpStatus === 404) return { status: "error", cooldownMs: 60 * 60_000, message: `model not found (HTTP 404) - set the *_MODEL variable to a current model: ${msg}` }

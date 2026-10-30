@@ -20,7 +20,7 @@
 //   - Apple Podcasts (lib/leads/podcasts.ts, no YouTube units): one directory search per step;
 //     podcasts whose RSS feed links a YouTube channel are added, with the feed's owner email as a
 //     contact route to review. A matching lead already in the file without an email gets it too.
-import { fetchChannelsViaApi, fetchFeaturedChannels, extractYouTubeRefs, resolveYouTubeRefs, searchChannelPage, searchRecentVideoChannels, toResearchRow, type DiscoveredChannel, type YouTubeRef } from "./discovery"
+import { fetchChannelsViaApi, fetchFeaturedChannels, extractYouTubeRefs, isQuotaExceeded, resolveYouTubeRefs, searchChannelPage, searchRecentVideoChannels, toResearchRow, type DiscoveredChannel, type YouTubeRef } from "./discovery"
 import { fetchFeed, searchApplePodcasts, type PodcastFetcher } from "./podcasts"
 
 /** An email from a podcast's RSS feed (<itunes:owner>), to attach to the matching YouTube lead. */
@@ -115,7 +115,7 @@ export async function discoverStep(opts: {
   const none = (skipped: string) => ({ rows: [], units: 0, searched: [], skipped, state, emailUpdates })
   const mode = opts.mode ?? "both"
   const minNew = opts.minNew ?? 10
-  const maxNew = opts.maxNew ?? 50
+  const maxNewCap = opts.maxNew ?? 50
   const featuredPerStep = opts.featuredPerStep ?? 10
   const expanded = new Set(state.expanded)
   const toExpand = (opts.featuredFrom ?? []).filter((id) => !expanded.has(id)).slice(0, featuredPerStep)
@@ -137,9 +137,14 @@ export async function discoverStep(opts: {
   const searchesLeft = Math.max(0, (opts.dailySearches ?? Infinity) - (state.searchesToday ?? 0))
   // When today's searches are used up, the cheap sources (featured, guest links, Apple) still run.
   const plannedSearches = Math.min(opts.searches, searchesLeft)
-  const estimate = plannedSearches * searchCost + toExpand.length + 2 * maxNew + Math.ceil(maxNew / 50)
+  const fixedCost = plannedSearches * searchCost + toExpand.length
     + 2 * toScan.length + guestResolvePerStep + (opts.apple ? opts.appleFeedsPerStep ?? 15 : 0)
-  if (state.unitsToday + estimate > opts.dailyUnits) {
+  // New channels cost ~2 units each (uploads + video details, plus 1 per 50 for the channel list), so
+  // a step takes as many as the key's remaining units allow, up to maxNew: a big cap uses the whole
+  // key in a few steps instead of leaving units unused.
+  const maxNew = Math.min(maxNewCap, Math.floor((opts.dailyUnits - state.unitsToday - fixedCost) / 2.02))
+  const estimate = fixedCost + 2 * Math.max(maxNew, 0) + Math.ceil(Math.max(maxNew, 0) / 50)
+  if (maxNew < Math.min(20, maxNewCap)) {
     return none(`this key's daily YouTube quota is used (${state.unitsToday} of ${opts.dailyUnits} units, a search step needs ~${estimate}); switch to a new key or wait for the reset at midnight US Pacific`)
   }
   if (!plannedSearches && opts.searches && !toExpand.length && !toScan.length && !state.guestQueue!.length && !opts.apple) {
@@ -147,6 +152,19 @@ export async function discoverStep(opts: {
   }
 
   let units = 0
+  // When YouTube itself says the quota is used (403 quotaExceeded), believe it over the app's own
+  // count: mark that limit used for today and carry on with what doesn't need it.
+  const quotaGuard = async <T,>(call: () => Promise<T>, limit: "searches" | "units"): Promise<T | null> => {
+    try {
+      return await call()
+    } catch (e) {
+      if (!isQuotaExceeded(e)) throw e
+      if (limit === "searches") state.searchesToday = Math.max(state.searchesToday ?? 0, opts.dailySearches ?? 0)
+      else state.unitsToday = Math.max(state.unitsToday, opts.dailyUnits)
+      searched.push(`YouTube says this key's ${limit === "searches" ? "search" : "unit"} quota for today is used (${(e as Error).message})`)
+      return null
+    }
+  }
   const carried = (state.pending ?? []).filter((id) => !opts.existingIds.has(id))
   const found = new Set<string>(carried)
   const searched: string[] = carried.length ? [`${carried.length} carried over`] : []
@@ -256,7 +274,8 @@ export async function discoverStep(opts: {
     if (kind === "video") {
       const s = nextVideoSearch(opts.queries, opts.regions, state, opts.now, opts.firstWindowDays ?? 7)
       if (!s) continue
-      const r = await searchRecentVideoChannels(s.query, s.region, { apiKey: opts.apiKey, publishedAfter: s.since, fetcher: opts.fetcher })
+      const r = await quotaGuard(() => searchRecentVideoChannels(s.query, s.region, { apiKey: opts.apiKey, publishedAfter: s.since, fetcher: opts.fetcher }), "searches")
+      if (!r) break
       units += searchCost
       state.searchesToday = (state.searchesToday ?? 0) + 1
       state.since![s.key] = opts.now.toISOString()
@@ -265,7 +284,8 @@ export async function discoverStep(opts: {
     } else {
       const s = nextSearch(opts.queries, opts.regions, state)
       if (!s) continue
-      const r = await searchChannelPage(s.query, s.region, { apiKey: opts.apiKey, pageToken: s.pageToken, fetcher: opts.fetcher })
+      const r = await quotaGuard(() => searchChannelPage(s.query, s.region, { apiKey: opts.apiKey, pageToken: s.pageToken, fetcher: opts.fetcher }), "searches")
+      if (!r) break
       units += searchCost
       state.searchesToday = (state.searchesToday ?? 0) + 1
       const page = (state.depth![s.key] ?? 0) + 1
@@ -283,8 +303,10 @@ export async function discoverStep(opts: {
   const ids = [...found].slice(0, maxNew)
   state.pending = [...found].slice(maxNew)
   let rows: Record<string, unknown>[] = []
-  if (ids.length) {
-    const r = await fetchChannelsViaApi(ids, { apiKey: opts.apiKey, fetcher: opts.fetcher })
+  const r = ids.length ? await quotaGuard(() => fetchChannelsViaApi(ids, { apiKey: opts.apiKey, fetcher: opts.fetcher }), "units") : null
+  // YouTube refused the fetch: keep what was found for the next key instead of losing it.
+  if (ids.length && !r) state.pending = [...found]
+  if (r) {
     units += r.apiUnits
     rows = r.channels.map((c) => {
       // New channels' own guest links come free with this fetch.

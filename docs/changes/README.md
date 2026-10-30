@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-30 | [Catch-up and bigger discovery steps](2026-10-30-catch-up.md): `npm run catch-up` works through the contact and entity backlog under the cycle lock; 50 searches a step, channels up to the key's remaining units; qualified 38 → 50 |
+| 2026-10-30 | [Provider values, not guesses](2026-10-30-provider-values-not-guesses.md): pause times from the providers' replies, YouTube's quotaExceeded believed over the app's count, entity check with video descriptions |
 | 2026-10-30 | [Half-emoji save error fixed](2026-10-30-half-emoji-save-error.md): shortened titles cut emoji in half, so the database rejected the lead ("unexpected end of hex escape"); every saved string is now valid text |
 | 2026-10-30 | [Quota counted like Google does](2026-10-30-full-quota-per-key.md): 100 searches + 10,000 units per key, 10 searches (~930 units) a step, cheap sources keep going, Engine page shows both |
 | 2026-10-30 | [Cycle runs hidden, contact-finder hang fixed](2026-10-30-cycle-runs-hidden-and-contact-hang-fix.md): no console window, linear email scan (a 1.5 MB page held a CPU core 20 min), 6-min budget, killed cycles no longer leave a blocking lock |

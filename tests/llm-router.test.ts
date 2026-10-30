@@ -41,7 +41,17 @@ test("failures are classified: daily quota rests until the reset, per-minute lim
   assert.equal(daily.cooldownMs, msUntilPacificMidnight(NOW))
   const gem = classifyFailure(429, '{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for metric generate_content_free_tier_requests, limit PerDay"}}', null, NOW)
   assert.equal(gem.status, "quota_exhausted")
-  assert.deepEqual(classifyFailure(429, "Rate limit reached: requests per minute", "7", NOW), { status: "rate_limited", cooldownMs: 7000, message: "rate limited: Rate limit reached: requests per minute" })
+  assert.deepEqual(classifyFailure(429, "Rate limit reached: requests per minute", "7", NOW), { status: "rate_limited", cooldownMs: 7000, message: "rate limited: Rate limit reached: requests per minute", retryFrom: "provider" })
+  // The provider's own retry time wins over the router's guess, even for a daily limit. This is
+  // Groq's real reply on 2026-10-30: a rolling tokens-per-day window, free again in 15.552 s.
+  const groqTpd = classifyFailure(429, '{"error":{"message":"Rate limit reached for model `openai/gpt-oss-120b` on tokens per day (TPD): Limit 200000, Used 199455, Requested 581. Please try again in 15.552s."}}', null, NOW)
+  assert.deepEqual([groqTpd.status, groqTpd.cooldownMs, groqTpd.retryFrom], ["quota_exhausted", 15_552, "provider"])
+  // Gemini's RetryInfo detail.
+  assert.equal(classifyFailure(429, '{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"52s"}]}}', null, NOW).cooldownMs, 52_000)
+  // No time in the reply: the router's estimate, labelled as one.
+  const guess = classifyFailure(429, "too many requests", null, NOW)
+  assert.equal(guess.retryFrom, "estimated")
+  assert.match(guess.message, /gave no retry time; estimated 60 s/)
   assert.equal(classifyFailure(401, "invalid api key", null, NOW).status, "error")
   assert.match(classifyFailure(404, "model not found", null, NOW).message, /set the \*_MODEL variable/)
   // Gemini sends no retry-after header; its body says how long to wait.

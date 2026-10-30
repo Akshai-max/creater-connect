@@ -67,3 +67,14 @@ test("the prompt's own patterns can't be copied as evidence; a story line alone 
   assert.equal(verdictFrom(story, { entity: "individual", quote: "At 30, I was broke" }, M).entityType, "needs_review")
   assert.equal(verdictFrom(story, { entity: "individual", quote: "Now I teach money" }, M).entityType, "individual")
 })
+
+test("a quote from a fetched video description is located and points at that video", () => {
+  const src = {
+    channelUrl: "https://www.youtube.com/channel/UC1", title: "Grow Show", description: "",
+    videos: [{ url: "https://youtu.be/a", title: "Episode 12", description: "Hi, I'm Sam Lee and on this show I talk to founders." }],
+  }
+  assert.equal(locateQuote(src, "I'm Sam Lee and on this show"), "https://youtu.be/a")
+  assert.match(entityPrompt(src), /Recent video descriptions:\n- Hi, I'm Sam Lee/)
+  // Without descriptions the prompt is unchanged (title-only answers keep their cache).
+  assert.doesNotMatch(entityPrompt({ ...src, videos: [{ url: "https://youtu.be/a", title: "Episode 12" }] }), /descriptions/)
+})

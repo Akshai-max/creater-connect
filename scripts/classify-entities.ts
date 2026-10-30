@@ -22,6 +22,7 @@ import { processBatch, emptyIndex } from "../lib/leads/process"
 import { senderFromEnv } from "../lib/leads/config"
 import { AllProvidersUnavailable, defaultRouter } from "../lib/llm/router"
 import { csvEscape } from "../lib/leads/export"
+import { fetchChannelsViaApi } from "../lib/leads/discovery"
 
 const { values } = parseArgs({
   options: {
@@ -30,6 +31,9 @@ const { values } = parseArgs({
     limit: { type: "string" },
     all: { type: "boolean", default: false },
     cache: { type: "string", default: "data/entity-cache.json" },
+    // For leads that would qualify if confirmed as individuals but whose titles didn't say who runs
+    // the channel: fetch their recent video descriptions (~2 YouTube units each) and ask again.
+    "with-descriptions": { type: "boolean", default: false },
   },
 })
 
@@ -48,6 +52,10 @@ function sourceOf(row: Row): EntitySource {
 
 // Would this row's outcome depend on the entity type? (Run the engine's own rules with
 // entity_type=individual: if it's still rejected for something else, skip the model call.)
+function probeStatus(row: Row, now: Date) {
+  const r = processBatch([{ row: { ...row, entity_type: "individual" }, ref: "probe" }], emptyIndex(), { now, source: "probe", sender: senderFromEnv() })
+  return r.processed[0]?.qualification.status ?? null
+}
 function entityDecides(row: Row, now: Date): boolean {
   const r = processBatch([{ row: { ...row, entity_type: "individual" }, ref: "probe" }], emptyIndex(), { now, source: "probe", sender: senderFromEnv() })
   const p = r.processed[0]
@@ -106,11 +114,37 @@ async function main() {
     }
   }
 
+  const keyOf = (row: Row, src: EntitySource) => createHash("sha1").update([row.stable_creator_id, src.title, src.description, src.videos.map((v) => v.title).join("|"),
+    // Descriptions only when present, so title-only answers keep their cache keys.
+    ...(src.videos.some((v) => v.description) ? [src.videos.map((v) => v.description ?? "").join("|")] : [])].join("\n")).digest("hex")
+
+  // Video descriptions for leads only the entity check stands between and the title-only check left
+  // for review. Same rules: the quote must appear word for word, now in a title or a description.
+  const descriptions = new Map<string, Map<string, string>>()
+  if (values["with-descriptions"]) {
+    const want = todo.filter((row) => {
+      const c = cache[keyOf(row, sourceOf(row))]
+      return c?.model && verdictFrom(sourceOf(row), c, c.model).entityType === "needs_review" && probeStatus(row, now) === "qualified"
+    })
+    if (want.length) {
+      const r = await fetchChannelsViaApi(want.map((x) => x.stable_creator_id), { apiKey: process.env.YOUTUBE_API_KEY })
+      for (const ch of r.channels) descriptions.set(ch.channelId, new Map(ch.videos.map((v) => [v.url, v.description ?? ""])))
+      console.log(`[classify] video descriptions for ${r.channels.length} leads that only need the entity check (${r.apiUnits} YouTube units)`)
+    }
+  }
+
   let totalMs = 0
   let consecutiveErrors = 0
   for (const row of todo) {
-    const src = sourceOf(row)
-    const key = createHash("sha1").update([row.stable_creator_id, src.title, src.description, src.videos.map((v) => v.title).join("|")].join("\n")).digest("hex")
+    const base = sourceOf(row)
+    const d = descriptions.get(row.stable_creator_id)
+    // Fetched descriptions cover the newest uploads; titles stay as stored, and a fetched video not
+    // in the stored list is added so its description can be quoted with its own URL.
+    const src: EntitySource = d ? { ...base, videos: [
+      ...base.videos.map((v) => ({ ...v, description: d.get(v.url) })),
+      ...[...d.entries()].filter(([u]) => !base.videos.some((v) => v.url === u)).map(([url, description]) => ({ url, title: "", description })),
+    ] } : base
+    const key = keyOf(row, src)
     const cached = cache[key]
     // The limit counts model calls: rows still left for review come back from the cache every run
     // and sit before newly added rows, so a row limit would mostly re-read the cache.

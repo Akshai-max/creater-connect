@@ -87,7 +87,14 @@ export default async function AiUsagePage() {
     const state: State = !cfg ? { label: "Not set up", tone: "secondary", usable: false }
       : probe?.state === "down" ? { label: "Not running", tone: "danger", usable: false, detail: probe.detail }
       : probe?.state === "no_model" ? { label: "Model missing", tone: "danger", usable: false, detail: probe.detail }
-      : restingUntil ? { label: `Paused until ${hhmm(restingUntil)}`, tone: "warn", usable: false, detail: "It hit a limit; calls go to the next provider until then." }
+      : restingUntil ? {
+        label: `Paused until ${hhmm(restingUntil)}`, tone: "warn", usable: false,
+        // Say where the time came from: the provider's own reply, or the router's estimate when the
+        // reply gave none (marked in the stored error since 2026-10-30).
+        detail: /gave no retry time/.test(rest?.error ?? "")
+          ? `It hit a limit. ${cfg.name} didn't say when to retry, so this time is an estimate; calls go to the next provider until then.`
+          : `It hit a limit. ${cfg.name[0].toUpperCase() + cfg.name.slice(1)} said to retry at this time; calls go to the next provider until then.`,
+      }
       : { label: "Ready", tone: "success", usable: true }
 
     const lastFailure = failures.reduce<LlmCall | undefined>((a, c) => (!a || c.at > a.at ? c : a), undefined)

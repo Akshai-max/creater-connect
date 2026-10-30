@@ -104,7 +104,7 @@ export async function searchChannels(
         `&relevanceLanguage=en&regionCode=${encodeURIComponent(region)}&q=${encodeURIComponent(q)}&key=${encodeURIComponent(opts.apiKey)}`
       units += 100
       const res = await fetcher(u)
-      if (!res.ok) throw new ProviderError("youtube", `search HTTP ${res.status}`)
+      if (!res.ok) throw await youtubeError(res, "search")
       for (const it of (await res.json()).items ?? []) if (it.id?.channelId) ids.add(it.id.channelId)
     }
   }
@@ -125,11 +125,21 @@ export async function searchChannelPage(
     `&relevanceLanguage=en&regionCode=${encodeURIComponent(region)}&q=${encodeURIComponent(query)}` +
     (opts.pageToken ? `&pageToken=${encodeURIComponent(opts.pageToken)}` : "") + `&key=${encodeURIComponent(opts.apiKey)}`
   const res = await fetcher(u)
-  if (!res.ok) throw new ProviderError("youtube", `search HTTP ${res.status}`)
+  if (!res.ok) throw await youtubeError(res, "search")
   const j = await res.json()
   const ids = [...new Set<string>((j.items ?? []).map((it: { id?: { channelId?: string } }) => it.id?.channelId).filter(Boolean))]
   return { channelIds: ids, nextPageToken: j.nextPageToken ?? null, apiUnits: 100 }
 }
+
+/** YouTube's own reason for a failed call (quotaExceeded, keyInvalid…) in the error message, so
+ *  callers act on what YouTube said instead of the app's own count. */
+async function youtubeError(res: { status: number; text(): Promise<string> }, what: string) {
+  let reason = ""
+  try { const j = JSON.parse(await res.text()); reason = j.error?.errors?.[0]?.reason ?? j.error?.status ?? "" } catch { /* not JSON */ }
+  return new ProviderError("youtube", `${what} HTTP ${res.status}${reason ? ` ${reason}` : ""}`)
+}
+/** YouTube says the project's daily quota (searches or units) is used up. */
+export const isQuotaExceeded = (e: unknown) => /\b(quotaExceeded|dailyLimitExceeded)\b/.test((e as Error)?.message ?? "")
 
 /** YouTube channel links in free text (video descriptions, podcast feeds): channel ids, @handles
  *  and legacy /user/ names. Bare "@name" mentions are ignored: they may be Instagram or X. */
@@ -155,7 +165,7 @@ export async function resolveYouTubeRefs(refs: YouTubeRef[], opts: { apiKey: str
     const param = r.kind === "handle" ? `forHandle=${encodeURIComponent("@" + r.value)}` : `forUsername=${encodeURIComponent(r.value)}`
     units += 1
     const res = await fetcher(`https://www.googleapis.com/youtube/v3/channels?part=id&${param}&key=${encodeURIComponent(opts.apiKey)}`)
-    if (!res.ok) throw new ProviderError("youtube", `channels HTTP ${res.status}`)
+    if (!res.ok) throw await youtubeError(res, "channels")
     const id = (await res.json()).items?.[0]?.id
     if (id) ids.set(key, id)
   }
@@ -177,7 +187,7 @@ export async function searchRecentVideoChannels(
     `&relevanceLanguage=en&regionCode=${encodeURIComponent(region)}&q=${encodeURIComponent(query)}` +
     `&publishedAfter=${encodeURIComponent(opts.publishedAfter)}&key=${encodeURIComponent(opts.apiKey)}`
   const res = await fetcher(u)
-  if (!res.ok) throw new ProviderError("youtube", `search HTTP ${res.status}`)
+  if (!res.ok) throw await youtubeError(res, "search")
   const items: { snippet?: { channelId?: string } }[] = (await res.json()).items ?? []
   const ids = [...new Set(items.map((it) => it.snippet?.channelId).filter((x): x is string => !!x))]
   return { channelIds: ids, videos: items.length, apiUnits: 100 }
@@ -188,7 +198,7 @@ export async function fetchFeaturedChannels(channelId: string, opts: { apiKey: s
   if (!opts.apiKey) throw new ProviderError("youtube", "YOUTUBE_API_KEY is not set.")
   const fetcher = opts.fetcher ?? defaultFetcher
   const res = await fetcher(`https://www.googleapis.com/youtube/v3/channelSections?part=contentDetails&channelId=${encodeURIComponent(channelId)}&key=${encodeURIComponent(opts.apiKey)}`)
-  if (!res.ok) throw new ProviderError("youtube", `channelSections HTTP ${res.status}`)
+  if (!res.ok) throw await youtubeError(res, "channelSections")
   const items: { contentDetails?: { channels?: string[] } }[] = (await res.json()).items ?? []
   const ids = [...new Set(items.flatMap((s) => s.contentDetails?.channels ?? []))].filter((id) => id !== channelId)
   return { channelIds: ids, apiUnits: 1 }
@@ -203,7 +213,7 @@ export async function fetchChannelsViaApi(channelIds: string[], opts: { apiKey: 
   const get = async (url: string) => {
     units += 1
     const res = await fetcher(`${url}&key=${encodeURIComponent(opts.apiKey!)}`)
-    if (!res.ok) throw new ProviderError("youtube", `HTTP ${res.status}`)
+    if (!res.ok) throw await youtubeError(res, "request")
     return res.json()
   }
   const channels: DiscoveredChannel[] = []

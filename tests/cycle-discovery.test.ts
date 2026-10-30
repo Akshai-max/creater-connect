@@ -162,3 +162,23 @@ test("with a separate daily search limit, searches cost 1 unit and stop at the l
   const tomorrow = await discoverStep({ ...base, searches: 1, dailySearches: 100, searchUnitCost: 1, existingIds: new Set(), state: { ...next.state, lastAt: null }, now: new Date(NOW.getTime() + 86_400_000), fetcher })
   assert.equal(tomorrow.state.searchesToday, 1)
 })
+
+test("when YouTube says quotaExceeded, its word beats the app's count: searches stop for the day without failing the step", async () => {
+  const fetcher = async (u: string) => {
+    const url = new URL(u)
+    if (url.pathname.endsWith("/search")) {
+      const body = { error: { code: 403, message: "The request cannot be completed because you have exceeded your quota.", errors: [{ reason: "quotaExceeded", domain: "youtube.quota" }] } }
+      return { ok: false, status: 403, text: async () => JSON.stringify(body), json: async () => body }
+    }
+    if (url.pathname.endsWith("/channelSections")) { const j = { items: [{ contentDetails: { channels: ["UC_friend"] } }] }; return { ok: true, status: 200, text: async () => JSON.stringify(j), json: async () => j } }
+    const ids = (url.searchParams.get("id") ?? "").split(",")
+    const j = { items: ids.map((id) => ({ id, snippet: { title: id, description: "" }, statistics: {}, contentDetails: { relatedPlaylists: {} } })) }
+    return { ok: true, status: 200, text: async () => JSON.stringify(j), json: async () => j }
+  }
+  const state = { ...emptyDiscoveryState(), day: pacificDay(NOW), searchesToday: 10 } // the app thought 90 were left
+  const r = await discoverStep({ ...base, searches: 3, dailySearches: 100, searchUnitCost: 1, featuredFrom: ["UC_me"], existingIds: new Set(["UC_me"]), state, now: NOW, fetcher })
+  assert.equal(r.skipped, null)
+  assert.equal(r.state.searchesToday, 100)
+  assert.match(r.searched.join(" | "), /YouTube says this key's search quota for today is used \(\[youtube\] search HTTP 403 quotaExceeded\)/)
+  assert.deepEqual(r.rows.map((x) => x.stable_creator_id), ["UC_friend"]) // featured channels still came through
+})
