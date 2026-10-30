@@ -1,8 +1,30 @@
-# Local LLM for the AI agent (AGENT_PROVIDER=ollama). Free and private: nothing leaves this machine.
-#   docker compose up -d            start Ollama and pull the model once
+# Local services. Nothing leaves this machine; ports are bound to localhost only.
+#   docker compose --env-file .env.local up -d postgres   the CRM database (LOCAL_PG_PASSWORD in .env.local)
+#   docker compose up -d                                   Ollama, the local LLM for the AI agent (AGENT_PROVIDER=ollama)
 #   docker compose logs -f ollama-pull
 # Change the model with OLLAMA_MODEL in .env (same value as in .env.local).
 services:
+  # The CRM database. Data lives in the "postgres" volume and survives restarts and image updates.
+  # DATABASE_URL=postgres://crm:<LOCAL_PG_PASSWORD>@127.0.0.1:5433/creator_crm  (5433: 5432 is taken by
+  # the PostgreSQL 18 installed on Windows). Backups: npm run db:backup.
+  postgres:
+    image: postgres:18.6-alpine
+    container_name: creator-crm-postgres
+    ports:
+      - "127.0.0.1:5433:5432" # localhost only
+    environment:
+      - POSTGRES_USER=crm
+      - POSTGRES_DB=creator_crm
+      - POSTGRES_PASSWORD=${LOCAL_PG_PASSWORD:?set LOCAL_PG_PASSWORD in .env.local and pass --env-file .env.local}
+    volumes:
+      - postgres:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crm -d creator_crm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   ollama:
     image: ollama/ollama:0.40.12
     container_name: creator-crm-ollama
@@ -40,3 +62,4 @@ services:
 
 volumes:
   ollama:
+  postgres:

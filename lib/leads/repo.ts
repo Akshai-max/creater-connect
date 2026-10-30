@@ -1,7 +1,7 @@
 // DB layer for the lead engine. Idempotent: leads upsert on identity_key, each
 // lead's writes go in one db.batch (a single transaction on neon-http), and
 // human-edited messages are never overwritten by a rerun.
-import { and, eq, inArray, sql } from "drizzle-orm"
+import { and, asc, eq, gt, inArray, sql } from "drizzle-orm"
 import { db } from "../db"
 import { candidates, engineRuns, leadEvidence, leads, outreachMessages, type Lead } from "../db/schema"
 import { contactKey, type ExistingIndex, type ProcessedLead } from "./process"
@@ -165,8 +165,16 @@ export async function upsertSequences(l: Lead, nowIso: string): Promise<number> 
   return stmts.length
 }
 
+// In pages: the database's HTTP API refuses any response over 64 MB, and the whole leads table
+// passed that at about 5,300 leads (each row carries its input JSON). 500 rows is a few MB.
 export async function loadAllLeads(opts: { includeFixtures: boolean }): Promise<Lead[]> {
-  const rows = await db.select().from(leads)
+  const rows: Lead[] = []
+  for (let after: string | null = null; ;) {
+    const page: Lead[] = await db.select().from(leads).where(after ? gt(leads.id, after) : undefined).orderBy(asc(leads.id)).limit(500)
+    rows.push(...page)
+    if (page.length < 500) break
+    after = page[page.length - 1].id
+  }
   return rows.filter((r) => opts.includeFixtures || !r.isFixture)
 }
 

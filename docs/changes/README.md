@@ -4,6 +4,7 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-31 | [Local Postgres in Docker](2026-10-31-local-postgres.md): Neon's 64 MB response limit broke the engine at ~5,300 leads; all data copied to a local Postgres 18.6 (row counts identical), Neon kept as backup, `npm run db:backup` |
 | 2026-10-30 | [Engine 24/7, one step per key](2026-10-30-run-247-one-step-per-key.md): the task runs on battery and catches up after sleep; a new key's 100 searches go in one step |
 | 2026-10-30 | [Catch-up and bigger discovery steps](2026-10-30-catch-up.md): `npm run catch-up` works through the contact and entity backlog under the cycle lock; 50 searches a step, channels up to the key's remaining units; qualified 38 → 50 |
 | 2026-10-30 | [Provider values, not guesses](2026-10-30-provider-values-not-guesses.md): pause times from the providers' replies, YouTube's quotaExceeded believed over the app's count, entity check with video descriptions |
