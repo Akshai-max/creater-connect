@@ -4,9 +4,12 @@
 // input so every lead is requalified. A full refresh of 275 channels costs ~556 quota units, so doing it
 // 72 times a day would blow the 10,000-unit daily quota. A 10-channel slice (~21 units) per run walks
 // the whole list in about a day. The cursor lives in data/engine-cycle-state.json.
-// Daily YouTube budget with the defaults: refresh 72 × ~21 ≈ 1,500 + discovery (up to 500 new channels
-// from 12 searches and 25 featured-channel lookups per step, ~2,300 units each, so about 3 steps right
-// after the quota resets, capped at 7,000) ≈ 8,500 of 10,000.
+// Daily YouTube budget per key (Cloud project), as its quota page lists it: 100 searches ("Search
+// Queries per day") and 10,000 units for everything else ("Queries per day"). A discovery step makes
+// 10 searches and adds up to 400 new channels (~2 units each), about 930 units, so a key gives about
+// 10 search steps; after that featured channels, guest links and Apple Podcasts keep running on units.
+// Refresh (~21 a cycle) and contact units count against the same counter, with 100 kept back for
+// refreshes. A new key (new fingerprint) starts fresh counters.
 //
 // Before the refresh, each cycle can also add leads:
 //   1. Discovery (lib/leads/cycle-discovery.ts; at most every --discover-every minutes, capped at
@@ -31,7 +34,7 @@ import { parseArgs } from "node:util"
 import { parse } from "csv-parse/sync"
 import { runEngine } from "../lib/leads/engine"
 import { csvEscape } from "../lib/leads/export"
-import { applyFeedEmail, discoverStep, emptyDiscoveryState, type DiscoveryState, type FeedEmail } from "../lib/leads/cycle-discovery"
+import { applyFeedEmail, discoverStep, emptyDiscoveryState, pacificDay, type DiscoveryState, type FeedEmail } from "../lib/leads/cycle-discovery"
 
 const { values } = parseArgs({
   options: {
@@ -41,9 +44,9 @@ const { values } = parseArgs({
     queries: { type: "string", default: "data/discovery-queries.txt" },
     // English results barely differ between regions, so a few regions and more queries find more.
     regions: { type: "string", default: "US,GB,AU" },
-    searches: { type: "string", default: "12" },
+    searches: { type: "string", default: "10" },
     // New channels added per discovery step; extra ones carry over to the next step.
-    "max-new": { type: "string", default: "500" },
+    "max-new": { type: "string", default: "400" },
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
     featured: { type: "string", default: "25" },
@@ -53,7 +56,15 @@ const { values } = parseArgs({
     "no-apple": { type: "boolean", default: false },
     "apple-feeds": { type: "string", default: "15" },
     "discover-every": { type: "string", default: "20" },
-    "discover-units": { type: "string", default: "7000" },
+    // A key's whole daily YouTube quota. Refresh and contact units count against it too (added after
+    // each run), and --reserve-units are kept back so the 20-minute refreshes keep working.
+    "discover-units": { type: "string", default: "10000" },
+    "reserve-units": { type: "string", default: "100" },
+    // Newer Cloud projects list "Search Queries per day" (100) apart from "Queries per day" (10,000);
+    // a search then counts there, and 1 unit against the 10,000. Set --search-units 100 and
+    // --daily-searches 100000 for the classic model (a search costs 100 units, no separate limit).
+    "daily-searches": { type: "string", default: "100" },
+    "search-units": { type: "string", default: "1" },
     "no-discover": { type: "boolean", default: false },
     "no-classify": { type: "boolean", default: false },
     // Entity checks per cycle (cached, so the rest are done next cycle). Keeps a 500-channel batch
@@ -71,9 +82,16 @@ const LOCK = "data/engine-cycle.lock"
 const SLICE_FILE = "data/engine-cycle-slice.txt"
 const STALE_LOCK_MS = 60 * 60 * 1000
 
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM" }
+}
+
 function acquireLock(): boolean {
   try {
-    if (fs.existsSync(LOCK) && Date.now() - fs.statSync(LOCK).mtimeMs < STALE_LOCK_MS) return false
+    // A cycle that was killed (window closed, Ctrl+C, reboot) never removes its lock, so a lock only
+    // counts while the process that wrote it is still running.
+    if (fs.existsSync(LOCK) && Date.now() - fs.statSync(LOCK).mtimeMs < STALE_LOCK_MS && pidAlive(Number(fs.readFileSync(LOCK, "utf8")))) return false
     fs.writeFileSync(LOCK, String(process.pid))
     return true
   } catch {
@@ -117,6 +135,8 @@ export type DiscoveryReport = {
   nextAt?: string | null // when the next search is due
   unitsToday?: number
   dailyUnits?: number
+  searchesToday?: number
+  dailySearches?: number
 }
 export type EntityReport =
   | { checked: number; individual: number; excluded: number; forReview: number; errors: number; stopped?: string | null }
@@ -136,7 +156,7 @@ function resetCounterIfKeyChanged() {
   if (st.keyId === keyId) return
   if (st.keyId && st.discovery) {
     console.log(`[discover] YouTube key changed: daily unit counter reset (was ${st.discovery.unitsToday ?? 0})`)
-    writeState({ keyId, discovery: { ...st.discovery, unitsToday: 0, lastAt: null } })
+    writeState({ keyId, discovery: { ...st.discovery, unitsToday: 0, searchesToday: 0, lastAt: null } })
   } else writeState({ keyId })
 }
 
@@ -154,7 +174,8 @@ async function discover(): Promise<DiscoveryReport> {
     queries, regions: values.regions!.split(",").map((x) => x.trim()).filter(Boolean),
     existingIds: new Set(existing.map((x) => x.stable_creator_id)),
     state: readState().discovery ?? emptyDiscoveryState(), now: new Date(), apiKey: process.env.YOUTUBE_API_KEY,
-    searches: Number(values.searches), maxNew: Number(values["max-new"]), dailyUnits: Number(values["discover-units"]), everyMin: Number(values["discover-every"]),
+    searches: Number(values.searches), maxNew: Number(values["max-new"]), dailyUnits: Number(values["discover-units"]) - Number(values["reserve-units"]),
+    dailySearches: Number(values["daily-searches"]), searchUnitCost: Number(values["search-units"]), everyMin: Number(values["discover-every"]),
     mode, minNew: Number(values["min-new"]), featuredPerStep: Number(values.featured),
     // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
     featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
@@ -164,7 +185,7 @@ async function discover(): Promise<DiscoveryReport> {
   // Feed emails for leads already in the file that have none (never overwrites an email).
   const filled = Object.keys(r.emailUpdates).length ? fillEmails(values.input!, r.emailUpdates) : 0
   if (filled) r.searched.push(`podcast feed emails added to ${filled} existing leads`)
-  const budget = { unitsToday: r.state.unitsToday, dailyUnits: Number(values["discover-units"]) }
+  const budget = { unitsToday: r.state.unitsToday, dailyUnits: Number(values["discover-units"]), searchesToday: r.state.searchesToday ?? 0, dailySearches: Number(values["daily-searches"]) }
   if (r.skipped) {
     console.log(`[discover] skipped: ${r.skipped}`)
     writeState({ discovery: r.state })
@@ -197,7 +218,7 @@ function classify(): EntityReport | null {
 type ContactsReport = { checked: number; found: number; business: number; units: number; pages: number; errors: number } | { failed: string } | null
 function findContacts(): ContactsReport {
   if (values["no-contacts"]) return null
-  const r = spawnSync(process.execPath, [...process.execArgv, "scripts/find-contacts.ts", "--in", values.input!, "--limit", values["contacts-limit"]!], { encoding: "utf8" })
+  const r = spawnSync(process.execPath, [...process.execArgv, "scripts/find-contacts.ts", "--in", values.input!, "--limit", values["contacts-limit"]!], { encoding: "utf8", timeout: 12 * 60_000 })
   const summary = /^\{\r?\n[\s\S]*^\}\s*$/m.exec(r.stdout ?? "")?.[0]
   try {
     const s = JSON.parse(summary ?? "")
@@ -244,6 +265,12 @@ async function main() {
     })
     // Advance only after a successful run, so a failed slice is retried next time.
     if (s.status === "succeeded") writeState({ cursor: cursor + slice.length, lastRun: s.runId })
+    // The key's daily quota is shared: count the refresh and contact units too (discovery already
+    // counted its own), so discovery stops before the key runs out instead of at a guessed cap.
+    const st = readState()
+    if (st.discovery && st.discovery.day === pacificDay(new Date())) {
+      writeState({ discovery: { ...st.discovery, unitsToday: st.discovery.unitsToday + Math.max(0, s.apiUnits - discovery.units) } })
+    }
     console.log(`[cycle] ${s.status}: qualified ${s.qualified}, unverified ${s.unverified}, rejected ${s.rejected}, failed ${s.failed}, api units ${s.apiUnits}`)
     if (s.status !== "succeeded") process.exitCode = 1
   } finally {

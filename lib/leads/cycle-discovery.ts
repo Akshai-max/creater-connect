@@ -59,6 +59,7 @@ export type DiscoveryState = {
   appleSeen?: number[] // podcasts (iTunes collection ids) already read
   day: string // US Pacific date the unit count belongs to
   unitsToday: number
+  searchesToday?: number // search.list calls today (a separate daily limit on newer Cloud projects)
   lastAt: string | null
 }
 export const emptyDiscoveryState = (): DiscoveryState => ({ pos: 0, pages: {}, day: "", unitsToday: 0, lastAt: null })
@@ -92,6 +93,10 @@ export function nextVideoSearch(queries: string[], regions: string[], state: Dis
 export async function discoverStep(opts: {
   queries: string[]; regions: string[]; existingIds: Set<string>; state: DiscoveryState; now: Date
   apiKey: string | undefined; searches: number; dailyUnits: number; everyMin: number; maxNew?: number
+  // YouTube's quota page can list "Search Queries per day" (e.g. 100) apart from "Queries per day"
+  // (10,000). Then a search counts once against dailySearches and searchUnitCost (1) against the
+  // units. Defaults: the classic model, where a search costs 100 units and there is no search limit.
+  dailySearches?: number; searchUnitCost?: number
   mode?: SearchMode; minNew?: number; firstWindowDays?: number
   featuredFrom?: string[]; featuredPerStep?: number
   guestScanPerStep?: number; guestResolvePerStep?: number
@@ -106,7 +111,7 @@ export async function discoverStep(opts: {
   }
   const emailUpdates: Record<string, FeedEmail> = {}
   const day = pacificDay(opts.now)
-  if (state.day !== day) { state.day = day; state.unitsToday = 0 }
+  if (state.day !== day) { state.day = day; state.unitsToday = 0; state.searchesToday = 0 }
   const none = (skipped: string) => ({ rows: [], units: 0, searched: [], skipped, state, emailUpdates })
   const mode = opts.mode ?? "both"
   const minNew = opts.minNew ?? 10
@@ -128,10 +133,17 @@ export async function discoverStep(opts: {
   // 100 per search, 1 per featured lookup, then about 2 per new channel (uploads + video details)
   // plus 1 per 50 channels.
   // Guest links: 2 per channel scanned, 1 per link resolved. Apple Podcasts: up to 1 per feed's link.
-  const estimate = opts.searches * 100 + toExpand.length + 2 * maxNew + Math.ceil(maxNew / 50)
+  const searchCost = opts.searchUnitCost ?? 100
+  const searchesLeft = Math.max(0, (opts.dailySearches ?? Infinity) - (state.searchesToday ?? 0))
+  // When today's searches are used up, the cheap sources (featured, guest links, Apple) still run.
+  const plannedSearches = Math.min(opts.searches, searchesLeft)
+  const estimate = plannedSearches * searchCost + toExpand.length + 2 * maxNew + Math.ceil(maxNew / 50)
     + 2 * toScan.length + guestResolvePerStep + (opts.apple ? opts.appleFeedsPerStep ?? 15 : 0)
   if (state.unitsToday + estimate > opts.dailyUnits) {
-    return none(`daily discovery budget reached (${state.unitsToday}/${opts.dailyUnits} units); resumes after midnight US Pacific`)
+    return none(`this key's daily YouTube quota is used (${state.unitsToday} of ${opts.dailyUnits} units, a search step needs ~${estimate}); switch to a new key or wait for the reset at midnight US Pacific`)
+  }
+  if (!plannedSearches && opts.searches && !toExpand.length && !toScan.length && !state.guestQueue!.length && !opts.apple) {
+    return none(`this key's ${opts.dailySearches} searches for today are used; switch to a new key or wait for the reset at midnight US Pacific`)
   }
 
   let units = 0
@@ -236,15 +248,17 @@ export async function discoverStep(opts: {
     state.appleSeen = [...seen].slice(-5000)
   }
 
-  // Searches, only while there's room under the cap.
-  for (let i = 0; i < opts.searches && found.size < maxNew; i++) {
+  // Searches, only while there's room under the cap and searches left today.
+  if (opts.searches && !plannedSearches) searched.push(`searches: all ${opts.dailySearches} for today used, cheap sources only`)
+  for (let i = 0; i < plannedSearches && found.size < maxNew; i++) {
     const kind = mode === "both" ? ((state.turn ?? 0) % 2 === 0 ? "video" : "channel") : mode
     state.turn = (state.turn ?? 0) + 1
     if (kind === "video") {
       const s = nextVideoSearch(opts.queries, opts.regions, state, opts.now, opts.firstWindowDays ?? 7)
       if (!s) continue
       const r = await searchRecentVideoChannels(s.query, s.region, { apiKey: opts.apiKey, publishedAfter: s.since, fetcher: opts.fetcher })
-      units += r.apiUnits
+      units += searchCost
+      state.searchesToday = (state.searchesToday ?? 0) + 1
       state.since![s.key] = opts.now.toISOString()
       state.vpos = s.pos + 1
       searched.push(`videos "${s.query}" ${s.region} since ${s.since.slice(0, 16)}Z: ${r.channelIds.length} channels, ${addFresh(r.channelIds)} new`)
@@ -252,7 +266,8 @@ export async function discoverStep(opts: {
       const s = nextSearch(opts.queries, opts.regions, state)
       if (!s) continue
       const r = await searchChannelPage(s.query, s.region, { apiKey: opts.apiKey, pageToken: s.pageToken, fetcher: opts.fetcher })
-      units += r.apiUnits
+      units += searchCost
+      state.searchesToday = (state.searchesToday ?? 0) + 1
       const page = (state.depth![s.key] ?? 0) + 1
       state.depth![s.key] = page
       const fresh = addFresh(r.channelIds)

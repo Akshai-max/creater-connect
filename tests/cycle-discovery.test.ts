@@ -70,7 +70,7 @@ test("a discovery step keeps only channels not already in the file and remembers
 test("the daily YouTube budget stops discovery until midnight US Pacific", async () => {
   const state = { ...emptyDiscoveryState(), day: pacificDay(NOW), unitsToday: 3900 }
   const r = await discoverStep({ ...base, existingIds: new Set(), state, now: NOW, fetcher: fakeYouTube({}) })
-  assert.match(r.skipped ?? "", /daily discovery budget reached \(3900\/4000/)
+  assert.match(r.skipped ?? "", /daily YouTube quota is used \(3900 of 4000 units/)
   const nextDay = await discoverStep({ ...base, existingIds: new Set(), state, now: new Date(NOW.getTime() + 24 * 3_600_000), fetcher: fakeYouTube({}) })
   assert.equal(nextDay.skipped, null)
   assert.equal(nextDay.state.unitsToday, 200)
@@ -145,4 +145,20 @@ test("featured channels of confirmed creators are looked up once each, for 1 uni
   assert.deepEqual(r.state.expanded, ["UC_me", "UC_me2"])
   const again = await discoverStep({ ...base, queries: [], searches: 0, featuredFrom: ["UC_me", "UC_me2"], existingIds: new Set(), state: { ...r.state, lastAt: null }, now: NOW, fetcher })
   assert.equal(again.skipped, "no discovery queries configured") // nothing left to expand, no queries
+})
+
+test("with a separate daily search limit, searches cost 1 unit and stop at the limit while cheap sources keep going", async () => {
+  const urls: string[] = []
+  const fetcher = fakeYouTube({ "video podcast|US|": { ids: ["UC1"], next: "P2" }, "featured|UC_me": { ids: ["UC_friend"] } }, urls)
+  const state = { ...emptyDiscoveryState(), day: pacificDay(NOW), searchesToday: 99, unitsToday: 50 }
+  const r = await discoverStep({ ...base, searches: 3, dailySearches: 100, searchUnitCost: 1, featuredFrom: ["UC_me"], existingIds: new Set(["UC_me"]), state, now: NOW, fetcher })
+  assert.equal(urls.filter((u) => u.includes("/search")).length, 1) // only 1 of the 100 left
+  assert.equal(r.state.searchesToday, 100)
+  assert.equal(r.units, 1 + 1 + 1) // search 1 + featured lookup 1 + one channels call
+  const next = await discoverStep({ ...base, searches: 3, dailySearches: 100, searchUnitCost: 1, featuredFrom: ["UC_me", "UC_me2"], existingIds: new Set(["UC_me", "UC_me2", "UC1", "UC_friend"]), state: { ...r.state, lastAt: null }, now: NOW, fetcher })
+  assert.equal(next.skipped, null) // featured channels still run
+  assert.match(next.searched.join(" | "), /searches: all 100 for today used, cheap sources only/)
+  // A new Pacific day resets both counters.
+  const tomorrow = await discoverStep({ ...base, searches: 1, dailySearches: 100, searchUnitCost: 1, existingIds: new Set(), state: { ...next.state, lastAt: null }, now: new Date(NOW.getTime() + 86_400_000), fetcher })
+  assert.equal(tomorrow.state.searchesToday, 1)
 })

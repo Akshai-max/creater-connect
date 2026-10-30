@@ -125,7 +125,29 @@ export function links(html: string, base: string): Link[] {
   return out
 }
 
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/g
+const LOCAL_CH = /[A-Za-z0-9._%+-]/
+const DOMAIN_CH = /[A-Za-z0-9.-]/
+const EMAIL_SHAPE = /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}$/
+
+/** Email-shaped strings in text, found by growing outward from each "@" (at most 64 characters left,
+ *  255 right). A single regex over the whole page is quadratic on a long run of letters or digits
+ *  (a 1.5 MB Wix page held a CPU core for 20 minutes), so this stays linear in the page size. */
+export function findEmails(text: string): { value: string; index: number }[] {
+  const out: { value: string; index: number }[] = []
+  for (let at = text.indexOf("@"); at >= 0; at = text.indexOf("@", at + 1)) {
+    let l = at
+    while (l > 0 && at - l < 64 && LOCAL_CH.test(text[l - 1])) l--
+    let r = at + 1
+    while (r < text.length && r - at <= 255 && DOMAIN_CH.test(text[r])) r++
+    const cand = text.slice(l, r).replace(/[.-]+$/, "")
+    // The domain may run into following words ("a@b.comcontact"): keep the longest prefix that is an email.
+    for (let end = cand.length; end > at - l + 3; end--) {
+      const v = cand.slice(0, end)
+      if (EMAIL_SHAPE.test(v)) { out.push({ value: v, index: l }); break }
+    }
+  }
+  return out
+}
 export const BUSINESS_RE = /(business|inquir|enquir|sponsor|collab|partner|booking|bookings|press|media kit|brand deal|work with (me|us)|contact)/i
 const BUSINESS_PATH_RE = /(contact|business|sponsor|partner|collab|press|media|booking|work-with|workwith|advertis|brand)/i
 const JUNK_EMAIL_RE = /(^(no-?reply|donotreply|mailer-daemon|postmaster|abuse|privacy|legal|dmca|copyright|webmaster|wordpress|admin)@)|@(example\.(com|org)|domain\.com|email\.com|sentry\.io|.*sentry.*|wixpress\.com|wix\.com|squarespace\.com|shopify\.com|godaddy\.com|linktr\.ee|beacons\.ai|stan\.store|mysite\.com|yourdomain\.com|company\.com)$|\.(png|jpe?g|gif|webp|svg|css|js)$/i
@@ -133,13 +155,18 @@ const JUNK_EMAIL_RE = /(^(no-?reply|donotreply|mailer-daemon|postmaster|abuse|pr
 // The line an email sits on, plus the line before when it's bare ("Business enquiries:" / "team@…").
 // Wider windows would mark a fan-mail address as business because a sponsorship line sits above it.
 function around(text: string, i: number, len: number): string {
-  const start = text.lastIndexOf("\n", i - 1) + 1
+  // At most ~150 characters either side: a minified page is one enormous "line".
+  const from = Math.max(0, i - 150), to = Math.min(text.length, i + len + 100)
+  const nl = text.lastIndexOf("\n", i - 1)
+  const start = Math.max(nl + 1, from)
   const endAt = text.indexOf("\n", i + len)
-  const line = text.slice(start, endAt < 0 ? text.length : endAt)
+  const end = endAt < 0 || endAt > to ? to : endAt
+  const line = text.slice(start, end)
   // A line with no label of its own ("team@x.com", "Email: team@x.com") borrows the line above.
-  if (/[A-Za-z]{3}/.test(line.replace(/\S+@\S+/g, "").replace(/\b(e-?mail|mail)\b/gi, "")) || start === 0) return line
-  const prevStart = text.lastIndexOf("\n", start - 2) + 1
-  return text.slice(prevStart, start) + line
+  const label = line.slice(0, i - start) + line.slice(i - start + len)
+  if (/[A-Za-z]{3}/.test(label.replace(/\b(e-?mail|mail)\b/gi, "")) || start === 0 || nl < 0) return line
+  const prevStart = Math.max(text.lastIndexOf("\n", nl - 1) + 1, nl - 150)
+  return text.slice(prevStart, nl + 1) + line
 }
 
 export type PageEmail = { email: string; quote: string; businessUse: boolean; mailto: boolean }
@@ -160,7 +187,7 @@ export function pageEmails(html: string, pageUrl: string): PageEmail[] {
     const prev = found.get(e)
     if (!prev || (businessUse && !prev.businessUse)) found.set(e, { email: e, quote, businessUse, mailto: mailto || !!prev?.mailto })
   }
-  for (const m of text.matchAll(EMAIL_RE)) add(m[0], around(text, m.index ?? 0, m[0].length), false)
+  for (const m of findEmails(text)) add(m.value, around(text, m.index, m.value.length), false)
   for (const l of links(html, pageUrl)) {
     if (!/^mailto:/i.test(l.href)) continue
     const addr = decodeURIComponent(l.href.slice(7).split("?")[0])

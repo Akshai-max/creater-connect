@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic"
 
 // What the scheduled cycle (scripts/engine-cycle.ts) did before a run; absent for manual runs.
 type CycleMetrics = {
-  discovery?: { status: "added" | "none_new" | "skipped" | "failed" | "off"; added: number; units: number; sources: string[]; reason?: string; nextAt?: string | null; unitsToday?: number; dailyUnits?: number }
+  discovery?: { status: "added" | "none_new" | "skipped" | "failed" | "off"; added: number; units: number; sources: string[]; reason?: string; nextAt?: string | null; unitsToday?: number; dailyUnits?: number; searchesToday?: number; dailySearches?: number }
   entityCheck?: { checked: number; individual: number; excluded: number; forReview: number; errors: number; stopped?: string | null } | { failed: string } | null
 }
 const cycleOf = (metrics: string | null) => parseJson<{ cycle?: CycleMetrics }>(metrics, {}).cycle ?? null
@@ -52,7 +52,7 @@ function DiscoveryCell({ cycle }: { cycle: CycleMetrics | null }) {
   }
   if (d.status === "failed") return <div><Badge variant="danger">Search failed</Badge><div className="mt-1 max-w-56 text-[11px] text-zinc-500">{d.reason}</div></div>
   if (d.status === "off") return <span className="text-xs text-zinc-400">Off</span>
-  if (d.reason && /budget/.test(d.reason)) return <span className="text-xs text-amber-600 dark:text-amber-400" title={d.reason}>Daily search quota used</span>
+  if (d.reason && /budget|quota is used/.test(d.reason)) return <span className="text-xs text-amber-600 dark:text-amber-400" title={d.reason}>Key&apos;s quota used: switch key</span>
   return <span className="text-xs text-zinc-400" title={d.reason}>No search this run</span>
 }
 
@@ -84,7 +84,10 @@ export default async function EnginePage() {
   const events = tests.length ? await db.select().from(seedTestEvents) : []
   const latestCycle = runs.map((r) => cycleOf(r.metrics)).find((c) => c?.discovery) ?? null
   const disc = latestCycle?.discovery
-  const last = runs[0]
+  // The run in progress has no counts yet ("checked 0 leads", "0 qualified"), so the banner and
+  // tiles describe the last finished run and only mention the one in progress.
+  const inProgress = runs[0]?.status === "running" ? runs[0] : null
+  const last = runs.find((r) => r.status !== "running")
   const addedToday = today.reduce((s, r) => s + (cycleOf(r.metrics)?.discovery?.added ?? 0), 0)
   const failedToday = today.filter((r) => r.status === "failed").length
   const unitsToday = today.reduce((s, r) => s + (r.apiUnits ?? 0), 0)
@@ -92,18 +95,21 @@ export default async function EnginePage() {
 
   const banner = !last ? { tone: "warn" as const, title: "No runs yet", text: "Start one with npm run engine -- --input file.csv, or install the 20-minute schedule." }
     : last.status === "failed" ? { tone: "danger" as const, title: `Last run failed ${ago(last.startedAt, now)}`, text: "Open its errors in the table below." }
-    : (now.getTime() - new Date(last.startedAt).getTime()) > 60 * 60_000 ? { tone: "warn" as const, title: `No run for ${ago(last.startedAt, now).replace(" ago", "")}`, text: "The engine normally runs every 20 minutes. Check that the scheduled task is still installed." }
-    : { tone: "success" as const, title: `Running normally · last run ${ago(last.startedAt, now)}`, text: `It took ${last.durationMs != null ? `${Math.round(last.durationMs / 1000)} s` : "—"} and checked ${last.totalInput} leads. Runs between searches re-check existing leads and refresh a few channels.` }
+    : !inProgress && (now.getTime() - new Date(last.startedAt).getTime()) > 60 * 60_000 ? { tone: "warn" as const, title: `No run for ${ago(last.startedAt, now).replace(" ago", "")}`, text: "The engine normally runs every 20 minutes. Check that the scheduled task is still installed." }
+    : { tone: "success" as const, title: inProgress ? `Running now · started ${ago(inProgress.startedAt, now)}` : `Running normally · last run ${ago(last.startedAt, now)}`, text: `The last finished run took ${last.durationMs != null ? `${Math.round(last.durationMs / 1000)} s` : "—"} and checked ${(last.totalInput ?? 0).toLocaleString("en-IN")} leads. Runs between searches re-check existing leads and refresh a few channels.` }
   const BannerIcon = banner.tone === "success" ? CheckCircle2 : banner.tone === "warn" ? AlertTriangle : XCircle
   const bannerBox = { success: "border-emerald-200 bg-emerald-50 dark:border-emerald-900/50 dark:bg-emerald-950/30", warn: "border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30", danger: "border-red-200 bg-red-50 dark:border-red-900/50 dark:bg-red-950/30" }[banner.tone]
   const bannerIcon = { success: "text-emerald-600 dark:text-emerald-400", warn: "text-amber-600 dark:text-amber-400", danger: "text-red-600 dark:text-red-400" }[banner.tone]
 
   const quotaPct = disc?.dailyUnits ? Math.min(100, ((disc.unitsToday ?? 0) / disc.dailyUnits) * 100) : null
+  const searchesUsed = !!disc?.dailySearches && (disc.searchesToday ?? 0) >= disc.dailySearches
   const tiles = [
     { label: "Qualified leads", value: last ? `${last.qualified}` : "—", hint: last ? `${last.unverified} to review · ${last.rejected} rejected` : "" },
     { label: "New channels today", value: `${addedToday}`, hint: disc?.nextAt ? `next search at ${hhmm(disc.nextAt)}` : "no search scheduled" },
     { label: "Runs today", value: `${today.length}`, hint: failedToday ? `${failedToday} failed` : "none failed" },
-    { label: "YouTube units today", value: unitsToday.toLocaleString("en-IN"), hint: "daily limit 10,000" },
+    // Summed over every run since local midnight, so it can pass 10,000 after a key change: each key
+    // has its own 10,000 a day (the card next to it counts the current key).
+    { label: "YouTube units today", value: unitsToday.toLocaleString("en-IN"), hint: "all keys used today" },
   ]
 
   return (
@@ -130,13 +136,18 @@ export default async function EnginePage() {
         ))}
         <Card className="col-span-2 lg:col-span-1">
           <CardContent className="pt-5">
-            <div className="text-xs text-zinc-500">Search quota today</div>
+            <div className="text-xs text-zinc-500">This key&apos;s quota today</div>
             {quotaPct != null ? (
-              <>
-                <div className="mt-1 text-2xl font-semibold tabular-nums">{Math.round(quotaPct)}%</div>
-                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"><div className={`h-full rounded-full ${quotaPct >= 90 ? "bg-red-500" : quotaPct >= 60 ? "bg-amber-500" : "bg-sky-500"}`} style={{ width: `${quotaPct}%` }} /></div>
-                <div className="mt-1 text-xs tabular-nums text-zinc-500">{(disc!.unitsToday ?? 0).toLocaleString("en-IN")} of {disc!.dailyUnits!.toLocaleString("en-IN")} units</div>
-              </>
+              <div className="mt-2 space-y-2.5">
+                {/* The key's two daily limits, as Google's quota page lists them. */}
+                {disc!.dailySearches != null && <QuotaBar label="Searches" used={disc!.searchesToday ?? 0} limit={disc!.dailySearches} />}
+                <QuotaBar label="Other calls" used={disc!.unitsToday ?? 0} limit={disc!.dailyUnits!} />
+                <div className={`text-xs ${searchesUsed || quotaPct >= 90 ? "text-amber-600 dark:text-amber-400" : "text-zinc-500"}`}>
+                  {quotaPct >= 90 ? "Used up: switch to a new key"
+                    : searchesUsed ? "Searches used up: other sources still run. Switch key for more searches"
+                    : `about ${Math.floor(((disc!.dailySearches ?? 0) - (disc!.searchesToday ?? 0)) / 10)} more search steps`}
+                </div>
+              </div>
             ) : <div className="mt-1 text-sm text-zinc-500">Not set up</div>}
           </CardContent>
         </Card>
@@ -258,6 +269,21 @@ export default async function EnginePage() {
           })}
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const pct = limit ? Math.min(100, (used / limit) * 100) : 0
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="text-zinc-600 dark:text-zinc-300">{label}</span>
+        <span className="tabular-nums text-zinc-500">{used.toLocaleString("en-IN")} / {limit.toLocaleString("en-IN")}</span>
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+        <div className={`h-full rounded-full ${pct >= 90 ? "bg-red-500" : pct >= 60 ? "bg-amber-500" : "bg-sky-500"}`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   )
 }

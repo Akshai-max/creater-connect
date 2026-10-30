@@ -4,6 +4,8 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-30 | [Quota counted like Google does](2026-10-30-full-quota-per-key.md): 100 searches + 10,000 units per key, 10 searches (~930 units) a step, cheap sources keep going, Engine page shows both |
+| 2026-10-30 | [Cycle runs hidden, contact-finder hang fixed](2026-10-30-cycle-runs-hidden-and-contact-hang-fix.md): no console window, linear email scan (a 1.5 MB page held a CPU core 20 min), 6-min budget, killed cycles no longer leave a blocking lock |
 | 2026-10-30 | [Quota counter resets on a new YouTube key](2026-10-30-reset-quota-counter-on-new-key.md): a changed key restarts the daily unit counter instead of showing "quota used" |
 | 2026-10-29 | [Website contact finder](2026-10-29-website-contact-finder.md): business emails from creators' own sites and link pages (robots.txt honoured, never guessed); qualified and Priority A 6 → 10 |
 | 2026-10-29 | [AI agent page redesign](2026-10-29-agent-page-redesign.md): status pill, slow-local-model notice, source tiles, plain setup rows, run states incl. interrupted, errors in plain words, one type scale |

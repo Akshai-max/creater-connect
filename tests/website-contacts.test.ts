@@ -57,6 +57,22 @@ test("page emails: visible and mailto, business context, junk dropped, obfuscate
   assert.equal(pageEmails("<p>hi@jane.test</p>", "https://jane.test/contact")[0].businessUse, true)
 })
 
+test("email scan stays linear on a huge page (a long run of letters held a CPU core for 20 minutes)", () => {
+  const junk = "A".repeat(1_400_000)
+  const html = `<p>${junk}</p><p>Business enquiries: team@jane.test</p>`
+  const t = Date.now()
+  const found = pageEmails(html, "https://jane.test/")
+  assert.ok(Date.now() - t < 2000, `took ${Date.now() - t} ms`)
+  assert.deepEqual(found.map((e) => e.email), ["team@jane.test"])
+  assert.ok(found[0].businessUse)
+  // A minified page is one huge line: the business context is the email's own neighbourhood.
+  const minified = `<p>${"x ".repeat(20_000)}sponsorship deals here ${"y ".repeat(20_000)}fan@jane.test</p>`
+  assert.equal(pageEmails(minified, "https://jane.test/")[0].businessUse, false)
+  // Edge shapes.
+  assert.deepEqual(pageEmails("<p>write to a.b+c@sub.jane.test.</p>", "https://jane.test/x").map((e) => e.email), ["a.b+c@sub.jane.test"])
+  assert.equal(pageEmails("<p>@ @@ x@ @y.z a@b</p>", "https://jane.test/x").length, 0)
+})
+
 test("contact page links: same site only, business pages first", () => {
   const html = `<a href="/blog">Blog</a><a href="/about">About</a><a href="/work-with-me">Work with me</a><a href="https://other.test/contact">x</a>`
   assert.deepEqual(contactPageLinks(html, "https://jane.test/"), ["https://jane.test/work-with-me", "https://jane.test/about"])

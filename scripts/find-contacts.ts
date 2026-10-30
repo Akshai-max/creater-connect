@@ -22,6 +22,10 @@ const { values } = parseArgs({
     videos: { type: "string", default: "15" },
     "recheck-days": { type: "string", default: "30" },
     cache: { type: "string", default: "data/contact-finder-cache.json" },
+    // Stops after this many minutes (the rest are looked up next time), so a slow batch of sites
+    // can't make an engine cycle run longer than the 20 minutes between cycles.
+    "max-minutes": { type: "string", default: "6" },
+    verbose: { type: "boolean", default: false },
     "dry-run": { type: "boolean", default: false },
   },
 })
@@ -82,8 +86,11 @@ async function main() {
   console.log(`[contacts] ${todo.length} leads without an email to look up; checking ${Math.min(limit, todo.length)}`)
 
   const crawler = new Crawler()
+  const deadline = Date.now() + Number(values["max-minutes"]) * 60_000
   for (const row of todo.slice(0, limit)) {
+    if (Date.now() > deadline) { console.log(`[contacts] stopped after ${values["max-minutes"]} min; ${todo.length - stats.checked} left for the next cycles`); break }
     const id = row.stable_creator_id
+    if (values.verbose) console.log(`  [${stats.checked + 1}] ${row.creator_name}`)
     try {
       const videos = await recentVideos(id, apiKey, Number(values.videos))
       stats.units++
