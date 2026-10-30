@@ -45,7 +45,9 @@ const { values } = parseArgs({
     queries: { type: "string", default: "data/discovery-queries.txt" },
     // English results barely differ between regions, so a few regions and more queries find more.
     regions: { type: "string", default: "US,GB,AU,CA,IE,NZ,SG" },
-    searches: { type: "string", default: "50" },
+    // All of a key's daily searches in one step: a fresh key is used up in a single cycle (its units go
+    // on fetching the channels found, ~2 each), then the next key can be put in .env.local.
+    searches: { type: "string", default: "100" },
     // New channels added per discovery step; extra ones carry over to the next step.
     // A ceiling: each step takes as many new channels as the key's remaining units allow (~2 each).
     "max-new": { type: "string", default: "5000" },
