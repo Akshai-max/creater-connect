@@ -140,6 +140,8 @@ async function youtubeError(res: { status: number; text(): Promise<string> }, wh
 }
 /** YouTube says the project's daily quota (searches or units) is used up. */
 export const isQuotaExceeded = (e: unknown) => /\b(quotaExceeded|dailyLimitExceeded)\b/.test((e as Error)?.message ?? "")
+/** YouTube says "too many requests for now" (429 rateLimitExceeded), without saying for how long. */
+export const isRateLimited = (e: unknown) => /HTTP 429|\brateLimitExceeded\b|\buserRateLimitExceeded\b/.test((e as Error)?.message ?? "")
 
 /** YouTube channel links in free text (video descriptions, podcast feeds): channel ids, @handles
  *  and legacy /user/ names. Bare "@name" mentions are ignored: they may be Instagram or X. */

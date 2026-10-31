@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { AllProvidersUnavailable, LlmRouter, classifyFailure, msUntilPacificMidnight, parseResetMs, providersFromEnv, type AuditRow, type AuditSink, type ProviderCfg } from "../lib/llm/router"
+import { AllProvidersUnavailable, LlmRouter, classifyFailure, msUntilPacificMidnight, parseResetMs, providersFromEnv, slotOf, type AuditRow, type AuditSink, type ProviderCfg } from "../lib/llm/router"
 
 const NOW = new Date("2026-10-29T12:00:00Z")
 const memorySink = (rows: AuditRow[] = []): AuditSink & { rows: AuditRow[] } => ({
@@ -8,7 +8,7 @@ const memorySink = (rows: AuditRow[] = []): AuditSink & { rows: AuditRow[] } => 
   async write(r) { rows.push(r) },
   async activeCooldowns(now) {
     const m = new Map()
-    for (const r of [...rows].reverse()) if (r.cooldownUntil && r.cooldownUntil > now.toISOString() && !m.has(r.provider)) m.set(r.provider, r.cooldownUntil)
+    for (const r of [...rows].reverse()) if (r.cooldownUntil && r.cooldownUntil > now.toISOString() && !m.has(slotOf(r))) m.set(slotOf(r), r.cooldownUntil)
     return m
   },
 })
@@ -27,15 +27,42 @@ const okReply = (content: string): Reply => ({ status: 200, body: { choices: [{ 
 const req = { purpose: "entity_check", subjectRef: "UC1", json: true, messages: [{ role: "user" as const, content: "hi" }], parse: (m: { content: string | null }) => JSON.parse(m.content ?? "") }
 
 test("providers come from env in order, and unconfigured ones are skipped", () => {
-  assert.deepEqual(providersFromEnv({ GROQ_API_KEY: "a", GEMINI_API_KEY: "b" }).map((p) => p.name), ["groq", "gemini", "ollama"])
-  assert.deepEqual(providersFromEnv({ GEMINI_API_KEY: "b", LLM_PROVIDERS: "gemini,groq" }).map((p) => `${p.name}/${p.model}`), ["gemini/gemini-3.5-flash-lite"])
+  // By default Groq and Gemini each bring two models, each with its own free quota.
+  assert.deepEqual(providersFromEnv({ GROQ_API_KEY: "a", GEMINI_API_KEY: "b" }).map(slotOf), ["groq/openai/gpt-oss-120b", "groq/openai/gpt-oss-20b", "gemini/gemini-3.5-flash-lite", "gemini/gemini-3.1-flash-lite", "ollama/qwen3:4b"])
+  assert.deepEqual(providersFromEnv({ GEMINI_API_KEY: "b", LLM_PROVIDERS: "gemini,groq", GEMINI_MODEL: "gemini-3.1-flash-lite" }).map(slotOf), ["gemini/gemini-3.1-flash-lite"])
+  assert.deepEqual(providersFromEnv({ GROQ_API_KEY: "a", GROQ_MODEL: " m1 , m2 ,", LLM_PROVIDERS: "groq" }).map((p) => p.model), ["m1", "m2"])
   assert.equal(providersFromEnv({ GROQ_API_KEY: "a", GROQ_MODEL: "llama-x", LLM_PROVIDERS: "groq" })[0].model, "llama-x")
   // Reasoning models: low effort by default so thinking doesn't use up max_tokens; "off" sends nothing.
   assert.equal(providersFromEnv({ GROQ_API_KEY: "a", LLM_PROVIDERS: "groq" })[0].reasoningEffort, "low")
   assert.equal(providersFromEnv({ GROQ_API_KEY: "a", LLM_PROVIDERS: "groq", LLM_REASONING_EFFORT: "off" })[0].reasoningEffort, undefined)
 })
 
+test("OpenRouter joins after Groq and Gemini, gets no reasoning_effort, and sends its fallback list", async () => {
+  const all = { GROQ_API_KEY: "a", GEMINI_API_KEY: "b", OPENROUTER_API_KEY: "TEST_KEY_E" }
+  const ps = providersFromEnv(all)
+  assert.deepEqual([...new Set(ps.map((p) => `${p.name}:${p.reasoningEffort ?? "-"}`))], ["groq:low", "gemini:low", "openrouter:-", "ollama:-"])
+  assert.equal(ps.filter((p) => p.name === "openrouter").length, 1) // its list goes in one request
+  const or = ps.find((p) => p.name === "openrouter")!
+  assert.equal(or.baseUrl, "https://openrouter.ai/api/v1")
+  assert.match(or.model, /^[^,]+:free(,[^,]+:free)+$/)
+  assert.equal(providersFromEnv({ ...all, OPENROUTER_MODEL: "x/one:free", LLM_PROVIDERS: "openrouter" })[0].model, "x/one:free")
+  // An old LLM_PROVIDERS without openrouter leaves it out even when its key is set.
+  assert.deepEqual([...new Set(providersFromEnv({ ...all, LLM_PROVIDERS: "groq,gemini,ollama" }).map((p) => p.name))], ["groq", "gemini", "ollama"])
+  let body: Record<string, unknown> = {}
+  const router = new LlmRouter([or], { sink: memorySink(), now: () => NOW, fetcher: async (_url: string, init: { body: string }) => {
+    body = JSON.parse(init.body)
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }) }
+  } })
+  await router.call(req)
+  assert.ok(!("reasoning_effort" in body))
+  assert.deepEqual(body.response_format, { type: "json_object" })
+  assert.ok(Array.isArray(body.models) && (body.models as string[]).length >= 2)
+  assert.equal(body.model, (body.models as string[])[0])
+})
+
 test("failures are classified: daily quota rests until the reset, per-minute limits use retry-after", () => {
+  // OpenRouter's daily cap for free models says "free-models-per-day".
+  assert.equal(classifyFailure(429, '{"error":{"message":"Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day","code":429}}', null, NOW).status, "quota_exhausted")
   const daily = classifyFailure(429, '{"error":{"message":"Rate limit reached for model in organization on tokens per day (TPD)"}}', null, NOW)
   assert.equal(daily.status, "quota_exhausted")
   assert.equal(daily.cooldownMs, msUntilPacificMidnight(NOW))
@@ -95,6 +122,27 @@ test("a cooldown written by an earlier run is respected by a new router", async 
   const router = new LlmRouter([groq, gemini], { sink, now: () => NOW, fetcher: fakeFetch({ "gemini.test": [okReply('{"entity":"unsure"}')] }, seen) })
   assert.equal((await router.call(req)).provider, "gemini")
   assert.deepEqual(seen, ["gemini.test"])
+})
+
+test("two models of one provider rest separately: a used-up 120b falls through to 20b", async () => {
+  const big: ProviderCfg = { ...groq, model: "big" }
+  const small: ProviderCfg = { ...groq, model: "small" }
+  const sink = memorySink()
+  const seen: string[] = []
+  const router = new LlmRouter([big, small, gemini], { sink, now: () => NOW, fetcher: async (url: string, init: { body: string }) => {
+    const model = JSON.parse(init.body).model
+    seen.push(model)
+    if (model === "big") return { ok: false, status: 429, headers: { get: () => null }, text: async () => '{"error":{"message":"tokens per day (TPD) limit reached"}}' }
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }) }
+  } })
+  const r1 = await router.call(req)
+  assert.equal(`${r1.provider}/${r1.model}`, "groq/small")
+  const r2 = await router.call(req)
+  assert.equal(`${r2.provider}/${r2.model}`, "groq/small")
+  assert.deepEqual(seen, ["big", "small", "small"]) // big rests after its daily limit; small keeps answering
+  // A new router reads the rest back for "big" only.
+  const later = new LlmRouter([big, small], { sink, now: () => NOW, fetcher: async (_u: string, init: { body: string }) => { seen.push(JSON.parse(init.body).model); return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify({ choices: [{ message: { content: '{"ok":true}' } }] }) } } })
+  assert.equal((await later.call(req)).model, "small")
 })
 
 test("unusable output is audited and the next provider is tried", async () => {

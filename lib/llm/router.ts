@@ -1,35 +1,61 @@
 // LLM router: free hosted models first, with automatic failover and an audit trail.
-//   LLM_PROVIDERS=groq,gemini,ollama   order to try (default; unconfigured ones are skipped)
-//   GROQ_API_KEY / GROQ_MODEL          console.groq.com
-//   GEMINI_API_KEY / GEMINI_MODEL      aistudio.google.com
-//   LLM_REASONING_EFFORT               low (default) | medium | high | off. The default models
-//                                      think before answering; low keeps that from using up max_tokens.
-// Groq and Gemini both speak the OpenAI chat-completions format. When one answers 429
+//   LLM_PROVIDERS=groq,gemini,openrouter,ollama   order to try (default; unconfigured ones are skipped)
+//   GROQ_API_KEY / GROQ_MODEL               console.groq.com
+//   GEMINI_API_KEY / GEMINI_MODEL           aistudio.google.com
+//     GROQ_MODEL and GEMINI_MODEL take a comma list: each model has its own free quota, so the
+//     router tries them in turn (one rest per provider and model).
+//   OPENROUTER_API_KEY / OPENROUTER_MODEL   openrouter.ai (":free" models, 50 requests a day; a comma list = fallbacks)
+//   LLM_REASONING_EFFORT                    low (default) | medium | high | off. The default models
+//                                           think before answering; low keeps that from using up max_tokens.
+// All hosted ones speak the OpenAI chat-completions format. When one answers 429
 // (rate limit or daily quota), 401/403 (key), 404 (model) or 5xx, the router writes an
 // llm_calls row with a cooldown and moves to the next provider. Cooldowns are read back
 // from llm_calls, so a quota that ran out stays skipped across runs until it resets.
 import { and, desc, eq, gt, isNotNull, notInArray, or, isNull } from "drizzle-orm"
 import { ollamaStructured } from "../agent/ollama"
 
-export type ProviderName = "groq" | "gemini" | "ollama"
+export type ProviderName = "groq" | "gemini" | "openrouter" | "ollama"
 export type ProviderCfg = { name: ProviderName; model: string; kind: "openai" | "ollama"; baseUrl: string; apiKey?: string; reasoningEffort?: string }
 type Env = Record<string, string | undefined>
 
 export const PROVIDER_DEFAULTS: Record<ProviderName, { baseUrl: string; model: string }> = {
-  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b" },
-  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.5-flash-lite" },
+  // Two models each, with separate free quotas (both tested with the JSON check on 2026-10-30).
+  groq: { baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b,openai/gpt-oss-20b" },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-3.5-flash-lite,gemini-3.1-flash-lite" },
+  // Free models that support JSON output (OpenRouter lists supported_parameters per model), as a
+  // fallback list: free models share upstream capacity and are often "temporarily rate-limited",
+  // so OpenRouter tries the next one within the same request. dots-3 follows instructions least well.
+  openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "nvidia/nemotron-3.5-super-vl:free,google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free" },
   ollama: { baseUrl: "http://localhost:11434", model: "qwen3:4b" },
 }
 
+// Hosted providers: the env prefix of their key/model, where to get a key, and whether their models
+// take reasoning_effort (OpenRouter's free models don't all accept it).
+export const HOSTED: Record<Exclude<ProviderName, "ollama">, { env: string; signup: string; reasoning: boolean }> = {
+  groq: { env: "GROQ", signup: "console.groq.com", reasoning: true },
+  gemini: { env: "GEMINI", signup: "aistudio.google.com", reasoning: true },
+  openrouter: { env: "OPENROUTER", signup: "openrouter.ai/keys", reasoning: false },
+}
+export const DEFAULT_ORDER = "groq,gemini,openrouter,ollama"
+
 export function providersFromEnv(env: Env = process.env): ProviderCfg[] {
-  const order = (env.LLM_PROVIDERS || "groq,gemini,ollama").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
+  const order = (env.LLM_PROVIDERS || DEFAULT_ORDER).split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
   const out: ProviderCfg[] = []
   const effort = (env.LLM_REASONING_EFFORT?.trim() || "low").toLowerCase()
   const reasoningEffort = effort === "off" ? undefined : effort
   for (const name of order) {
-    if (name === "groq" && env.GROQ_API_KEY?.trim()) out.push({ name, kind: "openai", baseUrl: PROVIDER_DEFAULTS.groq.baseUrl, model: env.GROQ_MODEL?.trim() || PROVIDER_DEFAULTS.groq.model, apiKey: env.GROQ_API_KEY.trim(), reasoningEffort })
-    if (name === "gemini" && env.GEMINI_API_KEY?.trim()) out.push({ name, kind: "openai", baseUrl: PROVIDER_DEFAULTS.gemini.baseUrl, model: env.GEMINI_MODEL?.trim() || PROVIDER_DEFAULTS.gemini.model, apiKey: env.GEMINI_API_KEY.trim(), reasoningEffort })
-    if (name === "ollama") out.push({ name, kind: "ollama", baseUrl: (env.OLLAMA_URL || PROVIDER_DEFAULTS.ollama.baseUrl).replace(/\/+$/, ""), model: env.OLLAMA_MODEL?.trim() || PROVIDER_DEFAULTS.ollama.model })
+    if (name === "ollama") {
+      out.push({ name, kind: "ollama", baseUrl: (env.OLLAMA_URL || PROVIDER_DEFAULTS.ollama.baseUrl).replace(/\/+$/, ""), model: env.OLLAMA_MODEL?.trim() || PROVIDER_DEFAULTS.ollama.model })
+      continue
+    }
+    const h = HOSTED[name as keyof typeof HOSTED]
+    const apiKey = h && env[`${h.env}_API_KEY`]?.trim()
+    if (!h || !apiKey) continue
+    const n = name as ProviderName
+    const model = env[`${h.env}_MODEL`]?.trim() || PROVIDER_DEFAULTS[n].model
+    // OpenRouter takes the whole list in one request (its own fallback); elsewhere each model is an entry.
+    const models = n === "openrouter" ? [model] : model.split(",").map((m) => m.trim()).filter(Boolean)
+    for (const m of models) out.push({ name: n, kind: "openai", baseUrl: PROVIDER_DEFAULTS[n].baseUrl, model: m, apiKey, reasoningEffort: h.reasoning ? reasoningEffort : undefined })
   }
   return out
 }
@@ -58,7 +84,8 @@ export function classifyFailure(httpStatus: number | null, body: string, retryAf
     : parseResetMs(/(?:retry|try again) in ((?:[\d.]+(?:ms|h|m|s))+)/i.exec(body)?.[1] ?? null)
       ?? parseResetMs(/"retryDelay"\s*:\s*"([\d.]+s)"/.exec(body)?.[1] ?? null)
   if (httpStatus === 429) {
-    const daily = /per ?day|daily|PerDay|RESOURCE_EXHAUSTED.*day|tokens per day|requests per day|\bRPD\b|\bTPD\b/i.test(body)
+    // "per-day": OpenRouter's "free-models-per-day" limit.
+    const daily = /per[ -]?day|daily|PerDay|RESOURCE_EXHAUSTED.*day|tokens per day|requests per day|\bRPD\b|\bTPD\b/i.test(body)
     // Use the reply's time even when it's short: Groq's daily token limit is a rolling window, so
     // "try again in 15s" is right, and resting until midnight would bench it for hours for nothing.
     if (daily) {
@@ -85,7 +112,9 @@ export type AuditRow = {
   httpStatus: number | null; latencyMs: number | null; inputTokens: number | null; outputTokens: number | null
   error: string | null; cooldownUntil: string | null; fallbackFrom: string | null
 }
-export type AuditSink = { write(row: AuditRow): Promise<void>; activeCooldowns(now: Date, models?: Partial<Record<ProviderName, string>>): Promise<Map<ProviderName, string>> }
+/** A provider and model: quotas, rests and rate budgets belong to this pair, not to the provider. */
+export const slotOf = (p: { name?: string; provider?: string; model: string }) => `${p.name ?? p.provider}/${p.model}`
+export type AuditSink = { write(row: AuditRow): Promise<void>; activeCooldowns(now: Date, slots?: string[]): Promise<Map<string, string>> }
 
 export const dbAuditSink: AuditSink = {
   async write(row) {
@@ -93,27 +122,30 @@ export const dbAuditSink: AuditSink = {
     const { llmCalls } = await import("../db/schema")
     await db.insert(llmCalls).values(row)
   },
-  async activeCooldowns(now, models) {
+  async activeCooldowns(now, slots) {
     const { db } = await import("../db")
     const { llmCalls } = await import("../db/schema")
     // Only limits and outages carry over between runs. A bad key (401/403) or model (404)
     // is fixed by changing .env.local, so it mustn't keep the provider benched afterwards.
-    // Quotas are per model, so a rest earned by another model (before a *_MODEL change) is ignored.
+    // Quotas are per model, so rests are kept per provider and model (slotOf).
     const rows = await db.select({ provider: llmCalls.provider, model: llmCalls.model, until: llmCalls.cooldownUntil }).from(llmCalls)
       .where(and(
         isNotNull(llmCalls.cooldownUntil), gt(llmCalls.cooldownUntil, now.toISOString()),
         or(isNull(llmCalls.httpStatus), notInArray(llmCalls.httpStatus, [401, 403, 404])),
       )).orderBy(desc(llmCalls.at)).limit(50)
-    const m = new Map<ProviderName, string>()
+    const m = new Map<string, string>()
     for (const r of rows) {
-      const p = r.provider as ProviderName
-      if (r.until && !m.has(p) && (!models?.[p] || models[p] === r.model)) m.set(p, r.until)
+      const k = slotOf(r)
+      if (r.until && !m.has(k) && (!slots || slots.includes(k))) m.set(k, r.until)
     }
     // A later successful call clears a cooldown (e.g. a per-minute limit that already passed).
-    for (const p of [...m.keys()]) {
-      const ok = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(eq(llmCalls.provider, p), eq(llmCalls.status, "ok"))).orderBy(desc(llmCalls.at)).limit(1)
-      const lastFail = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(eq(llmCalls.provider, p), isNotNull(llmCalls.cooldownUntil))).orderBy(desc(llmCalls.at)).limit(1)
-      if (ok[0] && lastFail[0] && ok[0].at > lastFail[0].at) m.delete(p)
+    for (const k of [...m.keys()]) {
+      const [provider, ...rest] = k.split("/")
+      const model = rest.join("/")
+      const same = and(eq(llmCalls.provider, provider), eq(llmCalls.model, model))
+      const ok = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(same, eq(llmCalls.status, "ok"))).orderBy(desc(llmCalls.at)).limit(1)
+      const lastFail = await db.select({ at: llmCalls.at }).from(llmCalls).where(and(same, isNotNull(llmCalls.cooldownUntil))).orderBy(desc(llmCalls.at)).limit(1)
+      if (ok[0] && lastFail[0] && ok[0].at > lastFail[0].at) m.delete(k)
     }
     return m
   },
@@ -151,8 +183,8 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 const newId = () => `llm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 
 export class LlmRouter {
-  private cooldowns = new Map<ProviderName, string>()
-  private budgets = new Map<ProviderName, Budget>()
+  private cooldowns = new Map<string, string>() // by slotOf (provider/model)
+  private budgets = new Map<string, Budget>()
   private loaded = false
   constructor(
     private readonly providers: ProviderCfg[],
@@ -169,13 +201,12 @@ export class LlmRouter {
     this.loaded = true
     if (this.opts.ignoreCooldowns) return
     try {
-      const models = Object.fromEntries(this.providers.map((p) => [p.name, p.model]))
-      for (const [p, until] of await this.sink().activeCooldowns(this.now(), models)) this.cooldowns.set(p, until)
+      for (const [k, until] of await this.sink().activeCooldowns(this.now(), this.providers.map(slotOf))) this.cooldowns.set(k, until)
     } catch { /* audit table unreachable: start fresh rather than fail */ }
   }
 
   private resting(p: ProviderCfg): string | null {
-    const until = this.cooldowns.get(p.name)
+    const until = this.cooldowns.get(slotOf(p))
     return until && until > this.now().toISOString() ? until : null
   }
 
@@ -189,14 +220,14 @@ export class LlmRouter {
     const requests = num("x-ratelimit-remaining-requests")
     if (tokens == null && requests == null) return
     const now = this.now().getTime()
-    this.budgets.set(p.name, {
+    this.budgets.set(slotOf(p), {
       tokens, tokenLimit, tokensResetAt: now + (parseResetMs(h.get("x-ratelimit-reset-tokens")) ?? 0),
       requests, requestsResetAt: now + (parseResetMs(h.get("x-ratelimit-reset-requests")) ?? 0),
     })
   }
 
   private async pace(p: ProviderCfg, estTokens: number) {
-    const b = this.budgets.get(p.name)
+    const b = this.budgets.get(slotOf(p))
     if (!b) return
     const now = this.now().getTime()
     let until = 0
@@ -211,7 +242,7 @@ export class LlmRouter {
     const wait = until - now
     if (wait > 0 && wait <= PACE_MAX_MS) {
       await (this.opts.sleep ?? sleep)(wait + 50)
-      this.budgets.delete(p.name)
+      this.budgets.delete(slotOf(p))
     }
   }
 
@@ -254,7 +285,7 @@ export class LlmRouter {
           if (!r.ok) {
             const f = classifyFailure(r.status, r.body, r.retryAfter, this.now())
             const until = f.cooldownMs > 0 ? new Date(this.now().getTime() + f.cooldownMs).toISOString() : null
-            if (until) this.cooldowns.set(p.name, until)
+            if (until) this.cooldowns.set(slotOf(p), until)
             await this.audit({ ...base, status: f.status, httpStatus: r.status, latencyMs: Date.now() - started, inputTokens: null, outputTokens: null, error: f.message, cooldownUntil: until })
             skipped.push(`${p.name} (${f.status}: ${f.message.slice(0, 90)})`)
             continue
@@ -266,7 +297,7 @@ export class LlmRouter {
         if ((e as { skip?: boolean }).skip) continue
         const f = classifyFailure(null, (e as Error).message, null, this.now())
         const until = new Date(this.now().getTime() + f.cooldownMs).toISOString()
-        this.cooldowns.set(p.name, until)
+        this.cooldowns.set(slotOf(p), until)
         await this.audit({ ...base, status: "error", httpStatus: null, latencyMs: Date.now() - started, inputTokens: null, outputTokens: null, error: f.message, cooldownUntil: until })
         skipped.push(`${p.name} (error: ${f.message.slice(0, 90)})`)
         continue
@@ -279,7 +310,7 @@ export class LlmRouter {
         skipped.push(`${p.name} (invalid output)`)
         continue
       }
-      this.cooldowns.delete(p.name)
+      this.cooldowns.delete(slotOf(p))
       await this.audit({ ...base, status: "ok", httpStatus: 200, latencyMs: Date.now() - started, inputTokens: usage.input, outputTokens: usage.output, error: null, cooldownUntil: null })
       return { value, provider: p.name, model: p.model, message }
     }
@@ -287,7 +318,7 @@ export class LlmRouter {
     throw new AllProvidersUnavailable(
       this.providers.length
         ? `no LLM provider available: ${skipped.join("; ") || "none can handle this request"}`
-        : "no LLM provider configured - set GROQ_API_KEY and/or GEMINI_API_KEY (or LLM_PROVIDERS=ollama)",
+        : "no LLM provider configured - set GROQ_API_KEY, GEMINI_API_KEY or OPENROUTER_API_KEY (or LLM_PROVIDERS=ollama)",
       next,
     )
   }
@@ -295,6 +326,12 @@ export class LlmRouter {
   private async openAi(p: ProviderCfg, req: { messages: ChatMessage[]; tools?: OpenAiTool[]; json?: boolean; maxTokens?: number }) {
     const fetcher: Fetcher = this.opts.fetcher ?? ((u, i) => fetch(u, i) as never)
     const body: Record<string, unknown> = { model: p.model, messages: req.messages, temperature: 0, max_tokens: req.maxTokens ?? 1024 }
+    // OPENROUTER_MODEL can list several models ("a:free,b:free"): OpenRouter tries them in order.
+    if (p.name === "openrouter" && p.model.includes(",")) {
+      const models = p.model.split(",").map((m) => m.trim()).filter(Boolean)
+      body.model = models[0]
+      body.models = models
+    }
     if (p.reasoningEffort) body.reasoning_effort = p.reasoningEffort
     if (req.tools?.length) body.tools = req.tools
     if (req.json) body.response_format = { type: "json_object" }

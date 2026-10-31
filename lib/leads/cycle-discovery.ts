@@ -20,7 +20,7 @@
 //   - Apple Podcasts (lib/leads/podcasts.ts, no YouTube units): one directory search per step;
 //     podcasts whose RSS feed links a YouTube channel are added, with the feed's owner email as a
 //     contact route to review. A matching lead already in the file without an email gets it too.
-import { fetchChannelsViaApi, fetchFeaturedChannels, extractYouTubeRefs, isQuotaExceeded, resolveYouTubeRefs, searchChannelPage, searchRecentVideoChannels, toResearchRow, type DiscoveredChannel, type YouTubeRef } from "./discovery"
+import { fetchChannelsViaApi, fetchFeaturedChannels, extractYouTubeRefs, isQuotaExceeded, isRateLimited, resolveYouTubeRefs, searchChannelPage, searchRecentVideoChannels, toResearchRow, type DiscoveredChannel, type YouTubeRef } from "./discovery"
 import { fetchFeed, searchApplePodcasts, type PodcastFetcher } from "./podcasts"
 
 /** An email from a podcast's RSS feed (<itunes:owner>), to attach to the matching YouTube lead. */
@@ -47,6 +47,7 @@ export type DiscoveryState = {
   pages: Record<string, string> // channel search: "query|region" → next page token, or "done"
   depth?: Record<string, number> // channel search: "query|region" → pages searched so far
   pending?: string[] // new channels found beyond the per-step cap, fetched first next time
+  pendingVia?: Record<string, string> // what found each pending channel (see discovered_via)
   turn?: number // which search kind is next when mode is "both"
   vpos?: number // video search: position in the query × region rotation
   since?: Record<string, string> // video search: "query|region" → last searched at
@@ -158,6 +159,13 @@ export async function discoverStep(opts: {
     try {
       return await call()
     } catch (e) {
+      // 429 rateLimitExceeded: YouTube says "too many for now" without saying whether that's a
+      // per-minute or per-day limit, so don't mark the day used: stop that kind of call for this
+      // step only, carry on with the other sources, and try again next step.
+      if (isRateLimited(e)) {
+        searched.push(`YouTube is rate-limiting this key's ${limit === "searches" ? "searches" : "calls"} for now; trying again next step (${(e as Error).message})`)
+        return null
+      }
       if (!isQuotaExceeded(e)) throw e
       if (limit === "searches") state.searchesToday = Math.max(state.searchesToday ?? 0, opts.dailySearches ?? 0)
       else state.unitsToday = Math.max(state.unitsToday, opts.dailyUnits)
@@ -168,9 +176,12 @@ export async function discoverStep(opts: {
   const carried = (state.pending ?? []).filter((id) => !opts.existingIds.has(id))
   const found = new Set<string>(carried)
   const searched: string[] = carried.length ? [`${carried.length} carried over`] : []
-  const addFresh = (ids: string[]) => {
+  // What found each new channel ("search:business coach|US", "featured:UC…", "guest", "apple:…"),
+  // stored as discovered_via on the lead, so the searches that lead to qualified leads can be told apart.
+  const via = new Map<string, string>(carried.map((id) => [id, state.pendingVia?.[id] ?? "carried"]))
+  const addFresh = (ids: string[], tag: string) => {
     const fresh = ids.filter((id) => !opts.existingIds.has(id) && !found.has(id))
-    fresh.forEach((id) => found.add(id))
+    fresh.forEach((id) => { found.add(id); via.set(id, tag) })
     return fresh.length
   }
 
@@ -182,7 +193,7 @@ export async function discoverStep(opts: {
       const r = await fetchFeaturedChannels(id, { apiKey: opts.apiKey, fetcher: opts.fetcher })
       units += r.apiUnits
       listed += r.channelIds.length
-      fresh += addFresh(r.channelIds)
+      fresh += addFresh(r.channelIds, `featured:${id}`)
       expanded.add(id)
     }
     searched.push(`featured channels of ${toExpand.length} confirmed creators: ${listed} listed, ${fresh} new`)
@@ -230,7 +241,7 @@ export async function discoverStep(opts: {
   if (state.guestQueue!.length && found.size < maxNew) {
     const batch = state.guestQueue!.splice(0, guestResolvePerStep)
     const ids = await resolve(batch)
-    searched.push(`guest links: ${batch.length} checked, ${addFresh(ids)} new${state.guestQueue!.length ? ` (${state.guestQueue!.length} waiting)` : ""}`)
+    searched.push(`guest links: ${batch.length} checked, ${addFresh(ids, "guest")} new${state.guestQueue!.length ? ` (${state.guestQueue!.length} waiting)` : ""}`)
   }
 
   // Apple Podcasts: one directory search, then each new podcast's RSS feed.
@@ -254,7 +265,7 @@ export async function discoverStep(opts: {
         const hint = feed.ownerEmail ? { email: feed.ownerEmail, feedUrl: p.feedUrl, lastActive: feed.latestEpisodeAt, podcast: p.name } : null
         if (opts.existingIds.has(id)) {
           if (hint) { emailUpdates[id] = hint; emails++ }
-        } else if (addFresh([id])) {
+        } else if (addFresh([id], `apple:${s.query}`)) {
           fresh++
           if (hint) { feedEmails[id] = hint; emails++ }
         }
@@ -280,7 +291,7 @@ export async function discoverStep(opts: {
       state.searchesToday = (state.searchesToday ?? 0) + 1
       state.since![s.key] = opts.now.toISOString()
       state.vpos = s.pos + 1
-      searched.push(`videos "${s.query}" ${s.region} since ${s.since.slice(0, 16)}Z: ${r.channelIds.length} channels, ${addFresh(r.channelIds)} new`)
+      searched.push(`videos "${s.query}" ${s.region} since ${s.since.slice(0, 16)}Z: ${r.channelIds.length} channels, ${addFresh(r.channelIds, `videos:${s.query}|${s.region}`)} new`)
     } else {
       const s = nextSearch(opts.queries, opts.regions, state)
       if (!s) continue
@@ -290,7 +301,7 @@ export async function discoverStep(opts: {
       state.searchesToday = (state.searchesToday ?? 0) + 1
       const page = (state.depth![s.key] ?? 0) + 1
       state.depth![s.key] = page
-      const fresh = addFresh(r.channelIds)
+      const fresh = addFresh(r.channelIds, `search:${s.query}|${s.region}`)
       // Worn out: no more pages, or a later page that is mostly channels already in the file.
       const wornOut = !r.nextPageToken || (page > 1 && fresh < minNew)
       state.pages[s.key] = wornOut ? "done" : r.nextPageToken!
@@ -302,10 +313,11 @@ export async function discoverStep(opts: {
 
   const ids = [...found].slice(0, maxNew)
   state.pending = [...found].slice(maxNew)
+  state.pendingVia = Object.fromEntries(state.pending.map((id) => [id, via.get(id) ?? "carried"]))
   let rows: Record<string, unknown>[] = []
   const r = ids.length ? await quotaGuard(() => fetchChannelsViaApi(ids, { apiKey: opts.apiKey, fetcher: opts.fetcher }), "units") : null
   // YouTube refused the fetch: keep what was found for the next key instead of losing it.
-  if (ids.length && !r) state.pending = [...found]
+  if (ids.length && !r) { state.pending = [...found]; state.pendingVia = Object.fromEntries(state.pending.map((id) => [id, via.get(id) ?? "carried"])) }
   if (r) {
     units += r.apiUnits
     rows = r.channels.map((c) => {
@@ -313,6 +325,7 @@ export async function discoverStep(opts: {
       queueRefs(c)
       scanned.add(c.channelId)
       const row = toResearchRow(c, { now: opts.now }) as Record<string, unknown>
+      row.discovered_via = via.get(c.channelId) ?? "carried"
       if (feedEmails[c.channelId]) applyFeedEmail(row, feedEmails[c.channelId])
       return row
     })

@@ -36,6 +36,7 @@ import { parse } from "csv-parse/sync"
 import { runEngine } from "../lib/leads/engine"
 import { csvEscape } from "../lib/leads/export"
 import { applyFeedEmail, discoverStep, emptyDiscoveryState, pacificDay, type DiscoveryState, type FeedEmail } from "../lib/leads/cycle-discovery"
+import { fetchAndQualifyCreators } from "../lib/leads/multi-platform"
 
 const { values } = parseArgs({
   options: {
@@ -43,8 +44,11 @@ const { values } = parseArgs({
     ids: { type: "string", default: "data/channel-ids-2026-10-29.txt" },
     slice: { type: "string", default: "10" },
     queries: { type: "string", default: "data/discovery-queries.txt" },
-    // English results barely differ between regions, so a few regions and more queries find more.
-    regions: { type: "string", default: "US,GB,AU,CA,IE,NZ,SG" },
+    // English results barely differ between regions: on 2026-10-31 "leadership podcast" pages found
+    // 31-47 new channels each in the US but 0-2 in GB/AU/CA/IE/NZ/SG, so other regions mostly spend
+    // the 100 daily searches on channels already found. One region, more queries. (A channel's
+    // country comes from its own settings, not the search region.)
+    regions: { type: "string", default: "US" },
     // All of a key's daily searches in one step: a fresh key is used up in a single cycle (its units go
     // on fetching the channels found, ~2 each), then the next key can be put in .env.local.
     searches: { type: "string", default: "100" },
@@ -54,12 +58,15 @@ const { values } = parseArgs({
     "search-mode": { type: "string", default: "both" },
     "min-new": { type: "string", default: "10" },
     featured: { type: "string", default: "25" },
-    // Guest links: existing channels whose video descriptions are read per step (2 units each).
-    "guest-scan": { type: "string", default: "25" },
+    // Guest links: existing channels whose video descriptions are read per step (2 units each), and
+    // queued links checked per step (1 unit each). Searches cap at 100 a day while units go up to
+    // 10,000, so these use the units searches can't: 2,306 links were waiting at 20 a step.
+    "guest-scan": { type: "string", default: "200" },
+    "guest-resolve": { type: "string", default: "1500" },
     // Apple Podcasts directory + RSS feeds (no YouTube units except resolving a feed's YouTube link).
     "no-apple": { type: "boolean", default: false },
     "apple-feeds": { type: "string", default: "15" },
-    "discover-every": { type: "string", default: "20" },
+    "discover-every": { type: "string", default: "10" },
     // A key's whole daily YouTube quota. Refresh and contact units count against it too (added after
     // each run), and --reserve-units are kept back so the 20-minute refreshes keep working.
     "discover-units": { type: "string", default: "10000" },
@@ -78,6 +85,9 @@ const { values } = parseArgs({
     // pages on the creator's own site. Each lead is looked up once a month at most.
     "contacts-limit": { type: "string", default: "25" },
     "no-contacts": { type: "boolean", default: false },
+    "multiplatform": { type: "boolean", default: true },
+    "no-multiplatform": { type: "boolean", default: false },
+    "multiplatform-limit": { type: "string", default: "5" },
   },
 })
 
@@ -88,6 +98,14 @@ const STALE_LOCK_MS = 60 * 60 * 1000
 
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
+  if (process.platform === "win32") {
+    try {
+      const res = spawnSync("powershell", ["-NoProfile", "-Command", `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 1 } else { 0 }`], { encoding: "utf8", timeout: 3000 })
+      return res.stdout?.trim() === "1"
+    } catch {
+      return false
+    }
+  }
   try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM" }
 }
 
@@ -183,7 +201,7 @@ async function discover(): Promise<DiscoveryReport> {
     mode, minNew: Number(values["min-new"]), featuredPerStep: Number(values.featured),
     // Confirmed individuals only: their featured channels are the ones most likely to be creators too.
     featuredFrom: existing.filter((x) => x.entity_type === "individual").map((x) => x.stable_creator_id),
-    guestScanPerStep: Number(values["guest-scan"]),
+    guestScanPerStep: Number(values["guest-scan"]), guestResolvePerStep: Number(values["guest-resolve"]),
     apple: !values["no-apple"], appleFeedsPerStep: Number(values["apple-feeds"]),
   })
   // Feed emails for leads already in the file that have none (never overwrites an email).
@@ -235,6 +253,36 @@ function findContacts(): ContactsReport {
   }
 }
 
+// Auto-discovery from Instagram, Spotify, and LinkedIn APIs.
+async function discoverMultiplatform(): Promise<number> {
+  if (values["no-multiplatform"] || !values.multiplatform) return 0
+  try {
+    const existing = parse(fs.readFileSync(values.input!, "utf8"), { columns: true, skip_empty_lines: true }) as Record<string, string>[]
+    const existingIds = new Set(existing.map((x) => x.stable_creator_id))
+    const qLines = fs.existsSync(values.queries!)
+      ? fs.readFileSync(values.queries!, "utf8").split(/\r?\n/).map((l) => l.replace(/#.*/, "").trim()).filter(Boolean)
+      : ["business coach"]
+    const q = qLines[Math.floor(Math.random() * qLines.length)] || "business coach"
+
+    const res = await fetchAndQualifyCreators({
+      platforms: ["instagram", "spotify", "linkedin"],
+      query: q,
+      limit: Number(values["multiplatform-limit"] ?? 5),
+      allowSampleDataOnAuthError: false,
+    })
+
+    const newRows = res.rawRows.filter((r) => !existingIds.has(String(r.stable_creator_id)))
+    if (newRows.length > 0) {
+      appendRows(values.input!, values.ids!, newRows)
+      console.log(`[multiplatform] added ${newRows.length} new creators from Instagram/Spotify/LinkedIn (query: "${q}")`)
+      return newRows.length
+    }
+  } catch (e: any) {
+    console.log(`[multiplatform] skipped or failed: ${e.message}`)
+  }
+  return 0
+}
+
 async function main() {
   if (!acquireLock()) {
     console.log("[cycle] previous run still going, skipping")
@@ -250,6 +298,7 @@ async function main() {
     }
     const entityCheck = classify()
     const contacts = findContacts()
+    await discoverMultiplatform()
 
     const lines = fs.readFileSync(values.ids!, "utf8").split(/\r?\n/).filter((l) => l.replace(/#.*/, "").trim())
     const size = Math.max(1, Number(values.slice))

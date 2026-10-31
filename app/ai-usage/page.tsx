@@ -3,7 +3,10 @@ import { llmCalls, type LlmCall } from "@/lib/db/schema"
 import { desc, gt, isNotNull, and } from "drizzle-orm"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { PROVIDER_DEFAULTS, providersFromEnv, type ProviderName } from "@/lib/llm/router"
+import { HOSTED, PROVIDER_DEFAULTS, providersFromEnv, slotOf, type ProviderName } from "@/lib/llm/router"
+
+// A key is set but LLM_PROVIDERS leaves the provider out, so the router never uses it.
+const configuredKeyButNotInOrder = (name: Exclude<ProviderName, "ollama">) => !!process.env[`${HOSTED[name].env}_API_KEY`]?.trim()
 import { probeOllama } from "@/lib/llm/probe"
 import { ArrowRight, CheckCircle2, AlertTriangle, XCircle } from "lucide-react"
 
@@ -69,14 +72,18 @@ export default async function AiUsagePage() {
   const configured = providersFromEnv()
   const ollamaCfg = configured.find((p) => p.name === "ollama")
   const ollamaProbe = ollamaCfg ? await probeOllama(ollamaCfg.baseUrl, ollamaCfg.model) : null
+  // One card per provider and model: each model has its own free quota and its own pauses.
   const order = configured.map((p) => p.name)
-  const names: ProviderName[] = [...order, ...(["groq", "gemini", "ollama"] as ProviderName[]).filter((n) => !order.includes(n))]
+  const entries: { name: ProviderName; cfg?: (typeof configured)[number] }[] = [
+    ...configured.map((cfg) => ({ name: cfg.name, cfg })),
+    ...(Object.keys(PROVIDER_DEFAULTS) as ProviderName[]).filter((n) => !order.includes(n)).map((name) => ({ name })),
+  ]
 
-  const providers = names.map((name) => {
-    const cfg = configured.find((p) => p.name === name)
-    const rows = day.filter((c) => c.provider === name)
+  const providers = entries.map(({ name, cfg }, idx) => {
+    const mine = (c: LlmCall) => c.provider === name && (!cfg || c.model === cfg.model)
+    const rows = day.filter(mine)
     const lastOk = rows.filter((c) => c.status === "ok").sort((a, b) => b.at.localeCompare(a.at))[0]
-    const rest = resting.find((c) => c.provider === name)
+    const rest = resting.find(mine)
     // A success after the cooldown was set means the provider is back.
     const restingUntil = rest && !(lastOk && lastOk.at > rest.at) ? rest.cooldownUntil : null
     const ok = rows.filter((c) => c.status === "ok")
@@ -100,8 +107,8 @@ export default async function AiUsagePage() {
     const lastFailure = failures.reduce<LlmCall | undefined>((a, c) => (!a || c.at > a.at ? c : a), undefined)
     const lastReason = lastFailure ? reason(lastFailure.status, lastFailure.httpStatus, lastFailure.error) : null
     return {
-      name, cfg, state, last,
-      role: cfg ? (order.indexOf(name) === 0 ? "Primary" : `Backup ${order.indexOf(name)}`) : "Off",
+      name, cfg, state, last, key: cfg ? slotOf(cfg) : name,
+      role: cfg ? (idx === 0 ? "Primary" : `Backup ${idx}`) : "Off",
       calls: rows.length, ok: ok.length, failed: failures.length,
       avgMs: ok.length ? Math.round(ok.reduce((s, c) => s + (c.latencyMs ?? 0), 0) / ok.length) : null,
       topProblems: countBy(failures.map((c) => reason(c.status, c.httpStatus, c.error))).slice(0, 2),
@@ -174,7 +181,7 @@ export default async function AiUsagePage() {
         {providers.map((p) => {
           const rate = p.calls ? Math.round((p.ok / p.calls) * 100) : null
           return (
-            <Card key={p.name} className={p.cfg ? "" : "opacity-60"}>
+            <Card key={p.key} className={p.cfg ? "" : "opacity-60"}>
               <CardHeader>
                 <div className="flex items-start justify-between gap-2">
                   <div>
@@ -187,7 +194,7 @@ export default async function AiUsagePage() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 {!p.cfg ? (
-                  <p className="text-xs text-zinc-500">{p.name === "groq" ? "Set GROQ_API_KEY (console.groq.com)" : p.name === "gemini" ? "Set GEMINI_API_KEY (aistudio.google.com)" : "Add ollama to LLM_PROVIDERS"}</p>
+                  <p className="text-xs text-zinc-500">{p.name === "ollama" ? "Add ollama to LLM_PROVIDERS" : `Set ${HOSTED[p.name].env}_API_KEY (${HOSTED[p.name].signup})${configuredKeyButNotInOrder(p.name) ? ", and add it to LLM_PROVIDERS" : ""}`}</p>
                 ) : p.calls === 0 ? (
                   <p className="text-xs text-zinc-500">No calls in the last 24 hours.</p>
                 ) : (

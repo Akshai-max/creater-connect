@@ -356,6 +356,18 @@ export const llmCalls = pgTable("llm_calls", {
 
 export type LlmCall = typeof llmCalls.$inferSelect
 
+// A person's decision on who runs a channel (the /leads/review screen). The lead file is rebuilt
+// every cycle, so decisions live here and the engine applies them to the rows before scoring.
+export const entityReviews = pgTable("entity_reviews", {
+  stableCreatorId: text("stable_creator_id").primaryKey(), // the YouTube channel id
+  decision: text("decision").notNull(), // individual | agency | management | brand | publication | directory | fan_account
+  evidenceUrl: text("evidence_url"), // the page the reviewer looked at
+  note: text("note"),
+  reviewedAt: text("reviewed_at").notNull(),
+})
+
+export type EntityReview = typeof entityReviews.$inferSelect
+
 export type Lead = typeof leads.$inferSelect
 export type LeadEvidenceRow = typeof leadEvidence.$inferSelect
 export type OutreachMessage = typeof outreachMessages.$inferSelect

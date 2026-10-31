@@ -53,7 +53,9 @@ export async function startSeedTest(opts: { send: boolean }): Promise<{ id: stri
     if (opts.send && e.channel === "email" && process.env.RESEND_API_KEY) {
       try {
         const { Resend } = await import("resend")
-        const r = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: process.env.OUTREACH_FROM_EMAIL || "outreach@example.com", to: e.recipient, subject: msg.subject, text: msg.body })
+        const rawFrom = process.env.OUTREACH_FROM_EMAIL?.trim()
+        const fromEmail = (!rawFrom || rawFrom.endsWith("@example.com")) ? "onboarding@resend.dev" : rawFrom
+        const r = await new Resend(process.env.RESEND_API_KEY).emails.send({ from: fromEmail, to: e.recipient, subject: msg.subject, text: msg.body })
         if (r.error) throw new Error(r.error.message)
         await recordSeedEvent({ seedTestId: id, channel: e.channel, recipient: e.recipient, eventType: "sent", messageId: r.data?.id ?? null, metadata: { adapter: "resend" } })
         delivered = "resend"

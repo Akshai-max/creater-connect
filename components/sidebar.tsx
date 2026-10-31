@@ -2,7 +2,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Home, Users, Sparkles, Mail, Kanban, LogOut, BadgeCheck, Activity, Bot, Gauge } from "lucide-react"
+import { Home, Users, Sparkles, Mail, Kanban, LogOut, BadgeCheck, Activity, Bot, Gauge, UserCheck } from "lucide-react"
 import { logout } from "@/app/login/actions"
 
 const nav = [
@@ -12,6 +12,7 @@ const nav = [
   { href: "/creators", label: "Roster", icon: Users },
   { href: "/outreach", label: "Outreach", icon: Mail },
   { href: "/leads", label: "Leads", icon: BadgeCheck },
+  { href: "/leads/review", label: "Confirm creators", icon: UserCheck },
   { href: "/engine", label: "Engine", icon: Activity },
   { href: "/agent", label: "AI agent", icon: Bot },
   { href: "/ai-usage", label: "AI usage", icon: Gauge },
@@ -29,7 +30,9 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {nav.map((item) => {
-          const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
+          // The longest matching link wins, so /leads/review highlights "Confirm creators", not "Leads".
+          const matches = (href: string) => pathname === href || (href !== "/" && pathname.startsWith(`${href}/`))
+          const active = matches(item.href) && !nav.some((o) => o.href.length > item.href.length && matches(o.href))
           const Icon = item.icon
           return (
             <Link

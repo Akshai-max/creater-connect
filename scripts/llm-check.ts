@@ -19,7 +19,9 @@ async function main() {
     const started = Date.now()
     try {
       const r = await router.call({
-        purpose: "llm_check", json: true, maxTokens: 60,
+        // The entity check's budget: models that think first (Gemini 3.1-lite) run out of 60 tokens
+        // before writing the JSON, which looked like a broken model when it wasn't.
+        purpose: "llm_check", json: true, maxTokens: 800,
         schema: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
         messages: [{ role: "system", content: 'Reply with JSON only: {"ok": true}' }, { role: "user", content: "ping" }],
         parse: (m) => {

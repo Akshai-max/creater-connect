@@ -18,7 +18,7 @@ export function NewTaskForm({ creatorId }: { creatorId: string }) {
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="New task…"
-        className="flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-1.5 text-sm shadow-sm placeholder:text-zinc-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400"
+        className="min-w-0 flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 bg-transparent px-3 py-1.5 text-sm shadow-sm placeholder:text-zinc-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-zinc-400"
         onKeyDown={(e) => {
           if (e.key === "Enter" && title.trim()) {
             startTransition(async () => {
@@ -32,7 +32,7 @@ export function NewTaskForm({ creatorId }: { creatorId: string }) {
       <select
         value={days}
         onChange={(e) => setDays(Number(e.target.value))}
-        className="rounded-md border border-zinc-200 dark:border-zinc-700 bg-transparent px-2 text-xs"
+        className="shrink-0 rounded-md border border-zinc-200 dark:border-zinc-700 bg-transparent px-2 text-xs"
       >
         <option value={0}>today</option>
         <option value={1}>tomorrow</option>
@@ -43,6 +43,7 @@ export function NewTaskForm({ creatorId }: { creatorId: string }) {
       </select>
       <Button
         size="sm"
+        className="shrink-0"
         disabled={pending || !title.trim()}
         onClick={() => startTransition(async () => {
           await createTask(creatorId, title, days)

@@ -18,10 +18,18 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
   const [drafting, startDrafting] = useTransition()
   const [sending, startSending] = useTransition()
   const [draftSource, setDraftSource] = useState<"ai" | "template" | null>(null)
+  const [draftModel, setDraftModel] = useState<string | null>(null)
   const [result, setResult] = useState<{ ok: boolean; sent: boolean; error?: string } | null>(null)
 
   const selected = creators.find((c) => c.id === creatorId)
-  const overrideEmail = selected?.email ?? ""
+  const [recipientEmail, setRecipientEmail] = useState(creators.find((c) => c.id === initialCreatorId)?.email ?? "")
+
+  function handleCreatorChange(id: string) {
+    setCreatorId(id)
+    setResult(null)
+    const c = creators.find((cr) => cr.id === id)
+    setRecipientEmail(c?.email ?? "")
+  }
 
   function generate() {
     if (!creatorId) return
@@ -31,6 +39,7 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
       setSubject(draft.subject)
       setBody(draft.body)
       setDraftSource(draft.source)
+      setDraftModel(draft.model ?? null)
     })
   }
 
@@ -38,7 +47,7 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
     if (!creatorId || !subject.trim() || !body.trim()) return
     setResult(null)
     startSending(async () => {
-      const r = await sendOutreach({ creatorId, subject, body, saveDraftOnly })
+      const r = await sendOutreach({ creatorId, subject, body, toEmail: recipientEmail.trim() || undefined, saveDraftOnly })
       setResult({ ok: r.ok, sent: r.sent, error: r.error })
       if (r.sent) {
         setTimeout(() => router.push("/outreach"), 800)
@@ -53,7 +62,7 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
         <CardContent className="space-y-3">
           <select
             value={creatorId}
-            onChange={(e) => { setCreatorId(e.target.value); setResult(null) }}
+            onChange={(e) => handleCreatorChange(e.target.value)}
             className="w-full h-9 rounded-md border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-3 text-sm"
           >
             <option value="">— select a creator —</option>
@@ -64,9 +73,21 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
             ))}
           </select>
           {selected && (
-            <div className="text-xs text-zinc-500 flex items-center gap-2">
-              <Mail className="h-3.5 w-3.5" />
-              {overrideEmail || <span className="text-amber-600">No email on file — will save as draft</span>}
+            <div className="space-y-1.5 pt-1">
+              <div className="text-xs text-zinc-500 flex items-center gap-2">
+                <Mail className="h-3.5 w-3.5" />
+                <span>Recipient Email</span>
+              </div>
+              <Input
+                type="email"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="creator@example.com"
+                className="h-8 text-sm"
+              />
+              {!recipientEmail && (
+                <div className="text-xs text-amber-600">No email on file — will save as draft</div>
+              )}
             </div>
           )}
         </CardContent>
@@ -99,7 +120,7 @@ export function Composer({ creators, initialCreatorId }: { creators: Creator[]; 
             <span>Pitch</span>
             {draftSource && (
               <span className={`text-xs font-normal ${draftSource === "ai" ? "text-emerald-600" : "text-amber-600"}`}>
-                drafted via {draftSource === "ai" ? "Claude Haiku 4.5" : "template (no API key)"}
+                drafted via {draftSource === "ai" ? (draftModel ?? "AI") : "template (no API key)"}
               </span>
             )}
           </CardTitle>

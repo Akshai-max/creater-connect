@@ -71,30 +71,65 @@ export async function scoreCandidate(c: {
   source?: string | null
   sourceDetail?: string | null
 }): Promise<AiScore> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return heuristicScore(c)
+  const userPrompt = buildUserPrompt(c)
 
+  // 1. Try Anthropic Claude if key is provided
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const Anthropic = (await import("@anthropic-ai/sdk")).default
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+
+      const result = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 600,
+        system: [
+          { type: "text", text: buildSystemPrompt(), cache_control: { type: "ephemeral" } },
+        ],
+        messages: [{ role: "user", content: userPrompt }],
+      })
+
+      const text = result.content
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("")
+      const jsonText = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim()
+      const parsed = JSON.parse(jsonText)
+
+      return {
+        fitScore: clamp(Number(parsed.fit_score), 0, 10),
+        fitReasoning: String(parsed.fit_reasoning ?? ""),
+        personaMatch: String(parsed.persona_match ?? "Other"),
+        nicheGuess: parsed.niche_guess && parsed.niche_guess !== "null" ? String(parsed.niche_guess) : null,
+        nicheRelevant: !!parsed.niche_relevant,
+        redFlags: Array.isArray(parsed.red_flags) ? parsed.red_flags.map(String) : [],
+        suggestedRateBand: parsed.suggested_rate_band && parsed.suggested_rate_band !== "null" ? String(parsed.suggested_rate_band) : null,
+        outreachAngle: String(parsed.outreach_angle ?? ""),
+        aiScored: true,
+      }
+    } catch (e) {
+      console.error(`Anthropic scoring failed for ${c.handle}, falling back to router:`, (e as Error).message)
+    }
+  }
+
+  // 2. Try configured LLM router providers (Groq, Gemini, OpenRouter, Ollama)
   try {
-    const Anthropic = (await import("@anthropic-ai/sdk")).default
-    const client = new Anthropic({ apiKey })
-
-    const userPrompt = buildUserPrompt(c)
-    const result = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
-      system: [
-        { type: "text", text: buildSystemPrompt(), cache_control: { type: "ephemeral" } },
+    const { defaultRouter } = await import("@/lib/llm/router")
+    const router = defaultRouter()
+    const r = await router.call({
+      purpose: "ai_scoring",
+      subjectRef: c.handle,
+      json: true,
+      maxTokens: 800,
+      messages: [
+        { role: "system", content: `${buildSystemPrompt()}\n\nReturn JSON only.` },
+        { role: "user", content: userPrompt },
       ],
-      messages: [{ role: "user", content: userPrompt }],
+      parse: (m) => {
+        const text = (m.content ?? "").replace(/^```(?:json)?\s*|\s*```$/g, "").trim()
+        return JSON.parse(text)
+      },
     })
-
-    const text = result.content
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("")
-    const jsonText = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim()
-    const parsed = JSON.parse(jsonText)
-
+    const parsed = r.value
     return {
       fitScore: clamp(Number(parsed.fit_score), 0, 10),
       fitReasoning: String(parsed.fit_reasoning ?? ""),

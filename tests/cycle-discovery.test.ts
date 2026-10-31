@@ -53,6 +53,8 @@ test("a discovery step keeps only channels not already in the file and remembers
   const r = await discoverStep({ ...base, existingIds: new Set(["UC_old"]), state: emptyDiscoveryState(), now: NOW, fetcher })
   assert.equal(r.skipped, null)
   assert.deepEqual(r.rows.map((x) => x.stable_creator_id).sort(), ["UC_new1", "UC_new2"])
+  // Each new lead records what found it, so searches can be compared by the qualified leads they bring.
+  assert.deepEqual([...new Set(r.rows.map((x) => x.discovered_via))], ["search:video podcast|US"])
   // Depth first: page 1 then page 2 of the same pair; it had no page 3, so the next step moves on.
   assert.equal(r.state.pages["video podcast|US"], "done")
   assert.deepEqual(r.state.depth, { "video podcast|US": 2 })
@@ -84,6 +86,8 @@ test("channels found beyond the per-step cap are kept and fetched first next tim
   assert.equal(r.searched.length, 1) // the cap was full after one search, so the second wasn't spent
   const next = await discoverStep({ ...base, searches: 2, maxNew: 2, existingIds: new Set(["UC1", "UC2"]), state: { ...r.state, lastAt: null }, now: NOW, fetcher: fakeYouTube({ "video podcast|US|P2": { ids: ["UC4"] } }) })
   assert.deepEqual(next.rows.map((x) => x.stable_creator_id), ["UC3", "UC4"])
+  // A carried-over channel keeps the tag of the search that found it.
+  assert.deepEqual(next.rows.map((x) => x.discovered_via), ["search:video podcast|US", "search:video podcast|US"])
   assert.deepEqual(next.state.pending, [])
 })
 
@@ -104,6 +108,7 @@ test("video search covers a new time window each time: the newest videos since t
   }, urls)
   const r = await discoverStep({ ...base, mode: "video", searches: 1, existingIds: new Set(["UC_old"]), state: emptyDiscoveryState(), now: NOW, fetcher })
   assert.deepEqual(r.rows.map((x) => x.stable_creator_id), ["UC_v1", "UC_v2"])
+  assert.equal(r.rows[0].discovered_via, "videos:video podcast|US")
   assert.ok(urls[0].includes("type=video") && urls[0].includes("order=date"))
   assert.equal(r.state.since!["video podcast|US"], NOW.toISOString())
   assert.equal(r.state.vpos, 1) // next time: the next pair
@@ -141,6 +146,7 @@ test("featured channels of confirmed creators are looked up once each, for 1 uni
   const r = await discoverStep({ ...base, queries: [], searches: 0, featuredFrom: ["UC_me", "UC_me2"], existingIds: new Set(["UC_old", "UC_me", "UC_me2"]), state: emptyDiscoveryState(), now: NOW, fetcher })
   assert.equal(r.skipped, null)
   assert.deepEqual(r.rows.map((x) => x.stable_creator_id), ["UC_friend"])
+  assert.equal(r.rows[0].discovered_via, "featured:UC_me")
   assert.equal(r.units, 2 + 1) // 2 lookups + one channels call
   assert.deepEqual(r.state.expanded, ["UC_me", "UC_me2"])
   const again = await discoverStep({ ...base, queries: [], searches: 0, featuredFrom: ["UC_me", "UC_me2"], existingIds: new Set(), state: { ...r.state, lastAt: null }, now: NOW, fetcher })
@@ -181,4 +187,24 @@ test("when YouTube says quotaExceeded, its word beats the app's count: searches 
   assert.equal(r.state.searchesToday, 100)
   assert.match(r.searched.join(" | "), /YouTube says this key's search quota for today is used \(\[youtube\] search HTTP 403 quotaExceeded\)/)
   assert.deepEqual(r.rows.map((x) => x.stable_creator_id), ["UC_friend"]) // featured channels still came through
+})
+
+test("YouTube's 429 rateLimitExceeded stops searching for this step only: the step doesn't fail and the day isn't marked used", async () => {
+  const fetcher = async (u: string) => {
+    const url = new URL(u)
+    if (url.pathname.endsWith("/search")) {
+      const body = { error: { code: 429, errors: [{ reason: "rateLimitExceeded", domain: "youtube.quota" }] } }
+      return { ok: false, status: 429, text: async () => JSON.stringify(body), json: async () => body }
+    }
+    if (url.pathname.endsWith("/channelSections")) { const j = { items: [{ contentDetails: { channels: ["UC_friend"] } }] }; return { ok: true, status: 200, text: async () => JSON.stringify(j), json: async () => j } }
+    const ids = (url.searchParams.get("id") ?? "").split(",")
+    const j = { items: ids.map((id) => ({ id, snippet: { title: id, description: "" }, statistics: {}, contentDetails: { relatedPlaylists: {} } })) }
+    return { ok: true, status: 200, text: async () => JSON.stringify(j), json: async () => j }
+  }
+  const state = { ...emptyDiscoveryState(), day: pacificDay(NOW), searchesToday: 10 }
+  const r = await discoverStep({ ...base, searches: 3, dailySearches: 100, searchUnitCost: 1, featuredFrom: ["UC_me"], existingIds: new Set(["UC_me"]), state, now: NOW, fetcher })
+  assert.equal(r.skipped, null)
+  assert.equal(r.state.searchesToday, 10) // not marked used for the day: YouTube didn't say it was daily
+  assert.match(r.searched.join(" | "), /rate-limiting this key's searches for now; trying again next step/)
+  assert.deepEqual(r.rows.map((x) => x.stable_creator_id), ["UC_friend"])
 })

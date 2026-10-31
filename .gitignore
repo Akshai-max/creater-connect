@@ -60,3 +60,8 @@ seed-creators.csv
 
 # researched lead inputs (real creators) — never commit
 /data/
+
+# temporary and local IDE files
+.claude/
+/scratch/
+

@@ -92,6 +92,17 @@ export async function runEngine(opts: EngineOptions): Promise<EngineSummary> {
     }
     s.totalInput = rows.length
     log(`loaded ${rows.length} input rows`)
+    // A person's entity decisions (/leads/review) win over the file and the AI check.
+    if (repo) {
+      const { applyEntityReview, loadEntityReviews } = await import("./entity-reviews")
+      const reviews = await loadEntityReviews()
+      let applied = 0
+      for (const r of rows) {
+        const rev = reviews.get(String(r.row.stable_creator_id ?? ""))
+        if (rev) { applyEntityReview(r.row, rev); applied++ }
+      }
+      if (applied) log(`entity reviews applied: ${applied}`)
+    }
 
     // 2-8. Normalize → … → draft (pure)
     const index = repo ? await repo.loadIndex() : emptyIndex()

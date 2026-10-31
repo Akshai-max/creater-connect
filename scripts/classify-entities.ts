@@ -86,7 +86,31 @@ async function main() {
   }
   const saveCsv = () => fs.writeFileSync(out, [cols.join(","), ...rows.map((r) => cols.map((c) => csvEscape(r[c] ?? "")).join(","))].join("\n") + "\n")
 
-  const todo = rows.filter((r) => (r.entity_type || "needs_review") === "needs_review" && (values.all || entityDecides(r, now)))
+  // Channels a person has reviewed (/leads/review) are settled: don't spend model calls on them.
+  let reviewed = new Set<string>()
+  try { reviewed = new Set((await (await import("../lib/leads/entity-reviews")).loadEntityReviews()).keys()) } catch { /* no database: check every row */ }
+  const probeMap = new Map<string, string>()
+  const sender = senderFromEnv()
+  const todo: Row[] = []
+  for (const r of rows) {
+    if ((r.entity_type || "needs_review") !== "needs_review" || reviewed.has(r.stable_creator_id)) continue
+    if (values.all) {
+      todo.push(r)
+      continue
+    }
+    const res = processBatch([{ row: { ...r, entity_type: "individual" }, ref: "probe" }], emptyIndex(), { now, source: "probe", sender })
+    const status = res.processed[0]?.qualification.status ?? null
+    if (status && status !== "rejected") {
+      probeMap.set(r.stable_creator_id, status)
+      todo.push(r)
+    }
+  }
+  // Prioritize channels that would immediately become "qualified" if confirmed as individual.
+  todo.sort((a, b) => {
+    const qA = probeMap.get(a.stable_creator_id) === "qualified" ? 1 : 0
+    const qB = probeMap.get(b.stable_creator_id) === "qualified" ? 1 : 0
+    return qB - qA
+  })
   const limit = values.limit ? Number(values.limit) : todo.length
   const stats = {
     rows: rows.length, needsReview: rows.filter((r) => (r.entity_type || "needs_review") === "needs_review").length, toClassify: Math.min(limit, todo.length),

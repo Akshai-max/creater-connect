@@ -18,52 +18,80 @@ async function syncStage(creatorId: string, event: OutreachEvent) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Draft a personalized pitch via Claude (or fall back to a template).
-// Uses Haiku 4.5 with prompt caching on the system prompt for low cost.
+// Draft a personalized pitch via Claude or the multi-provider LLM router
+// (Groq, Gemini, OpenRouter, Ollama), falling back to template if no LLM is ready.
 // ─────────────────────────────────────────────────────────────────────────────
-export async function draftOutreach(creatorId: string, campaignBrief?: string): Promise<{ subject: string; body: string; source: "ai" | "template" }> {
+export async function draftOutreach(
+  creatorId: string,
+  campaignBrief?: string
+): Promise<{ subject: string; body: string; source: "ai" | "template"; model?: string }> {
   const c = (await db.select().from(creators).where(eq(creators.id, creatorId)))[0]
   if (!c) throw new Error("Creator not found")
 
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return { ...templateDraft(c as any), source: "template" }
-  }
+  const userPrompt = buildUserPrompt(c as any, campaignBrief)
 
-  try {
-    const Anthropic = (await import("@anthropic-ai/sdk")).default
-    const client = new Anthropic({ apiKey })
-    const userPrompt = buildUserPrompt(c as any, campaignBrief)
+  // 1. If Anthropic is configured, try Claude first
+  if (process.env.ANTHROPIC_API_KEY) {
+    try {
+      const Anthropic = (await import("@anthropic-ai/sdk")).default
+      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      const result = await client.messages.create({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 600,
+        system: [
+          {
+            type: "text",
+            text: OUTREACH_SYSTEM_PROMPT,
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: userPrompt }],
+      })
 
-    const result = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
-      system: [
-        {
-          type: "text",
-          text: OUTREACH_SYSTEM_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: userPrompt }],
-    })
+      const text = result.content
+        .filter((b: any) => b.type === "text")
+        .map((b: any) => b.text)
+        .join("")
 
-    const text = result.content
-      .filter((b: any) => b.type === "text")
-      .map((b: any) => b.text)
-      .join("")
-
-    // Strip markdown fences if present
-    const jsonText = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim()
-    const parsed = JSON.parse(jsonText)
-    if (typeof parsed.subject !== "string" || typeof parsed.body !== "string") {
-      throw new Error("Bad model output shape")
+      const jsonText = text.replace(/^```(?:json)?\n?|\n?```$/g, "").trim()
+      const parsed = JSON.parse(jsonText)
+      if (typeof parsed.subject === "string" && typeof parsed.body === "string") {
+        return { subject: parsed.subject, body: parsed.body, source: "ai", model: "Claude Haiku 4.5" }
+      }
+    } catch (e) {
+      console.error("draftOutreach Anthropic failed, trying router:", e)
     }
-    return { subject: parsed.subject, body: parsed.body, source: "ai" }
-  } catch (e) {
-    console.error("draftOutreach AI failed, falling back to template:", e)
-    return { ...templateDraft(c as any), source: "template" }
   }
+
+  // 2. Try configured LLM router providers (Groq, Gemini, OpenRouter, Ollama)
+  try {
+    const { defaultRouter } = await import("@/lib/llm/router")
+    const router = defaultRouter()
+    const r = await router.call({
+      purpose: "outreach_draft",
+      subjectRef: creatorId,
+      json: true,
+      maxTokens: 800,
+      messages: [
+        { role: "system", content: `${OUTREACH_SYSTEM_PROMPT}\n\nReturn JSON only with keys "subject" and "body".` },
+        { role: "user", content: userPrompt },
+      ],
+      parse: (m) => {
+        const text = (m.content ?? "").replace(/^```(?:json)?\s*|\s*```$/g, "").trim()
+        const parsed = JSON.parse(text)
+        if (typeof parsed.subject !== "string" || typeof parsed.body !== "string") {
+          throw new Error("Bad model output shape")
+        }
+        return parsed as { subject: string; body: string }
+      },
+    })
+    return { subject: r.value.subject, body: r.value.body, source: "ai", model: `${r.provider} (${r.model})` }
+  } catch (e) {
+    console.error("draftOutreach LLM router failed, falling back to template:", e)
+  }
+
+  // 3. Fallback to template
+  return { ...templateDraft(c as any), source: "template" }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +109,8 @@ export async function sendOutreach(opts: {
 
   const id = newId("out")
   const to = opts.toEmail || c.email || ""
-  const fromEmail = process.env.OUTREACH_FROM_EMAIL || "outreach@example.com"
+  const rawFrom = process.env.OUTREACH_FROM_EMAIL?.trim()
+  const fromEmail = (!rawFrom || rawFrom.endsWith("@example.com")) ? "onboarding@resend.dev" : rawFrom
   const apiKey = process.env.RESEND_API_KEY
 
   const baseRow = {

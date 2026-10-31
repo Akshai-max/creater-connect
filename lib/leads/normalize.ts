@@ -58,7 +58,7 @@ const PLATFORM_HOSTS: Record<Platform, string[]> = {
 
 const STABLE_ID_PATTERNS: Record<Platform, RegExp> = {
   youtube: /^UC[A-Za-z0-9_-]{22}$/, // channel id, not @handle
-  instagram: /^\d{3,20}$/, // numeric user id
+  instagram: /^(\d{3,20}|[A-Za-z0-9._]{1,30})$/, // numeric user id or username
   tiktok: /^\d{5,25}$/,
   apple_podcasts: /^\d{5,15}$/,
   spotify: /^[A-Za-z0-9]{22}$/,

@@ -4,6 +4,9 @@ One file per change: why it was made, what changed, how it was checked, and anyt
 
 | Date | Change |
 |---|---|
+| 2026-10-31 | [Use the units searches can't](2026-10-31-use-the-units-searches-cant.md): searches cap at 100 a day, so one region (other regions found 0–2 new) and 1,500 guest links a step; a 429 no longer fails the step |
+| 2026-10-31 | [Two models per provider, discovery tags](2026-10-31-two-models-per-provider-and-discovery-tags.md): Groq 120b+20b and Gemini 3.5+3.1-lite rest separately; each new lead records what found it; `npm run discovery-yield` |
+| 2026-10-31 | [Backup LLM provider: OpenRouter](2026-10-31-backup-llm-providers.md): free models as a fallback list after Groq and Gemini; Cerebras and Mistral tried and removed |
 | 2026-10-31 | [Local Postgres in Docker](2026-10-31-local-postgres.md): Neon's 64 MB response limit broke the engine at ~5,300 leads; all data copied to a local Postgres 18.6 (row counts identical), Neon kept as backup, `npm run db:backup` |
 | 2026-10-30 | [Engine 24/7, one step per key](2026-10-30-run-247-one-step-per-key.md): the task runs on battery and catches up after sleep; a new key's 100 searches go in one step |
 | 2026-10-30 | [Catch-up and bigger discovery steps](2026-10-30-catch-up.md): `npm run catch-up` works through the contact and entity backlog under the cycle lock; 50 searches a step, channels up to the key's remaining units; qualified 38 → 50 |
